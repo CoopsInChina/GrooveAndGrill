@@ -1,0 +1,15 @@
+# WiFi credentials — never commit this file
+src/wifi_config.h
+
+# Proprietary logo asset and its generated C conversion
+assets/
+src/logo_img.c
+src/logo_img.h
+
+# PlatformIO build artefacts
+.pio/
+.pioenvs/
+.piolibdeps/
+sdkconfig
+dependencies.lock
+managed_components/

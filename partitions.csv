@@ -1,0 +1,9 @@
+# Partition table for 16 MB flash with dual OTA slots
+# App partitions must be aligned to 0x10000 (64 KB).
+# nvs+otadata end at 0x11000, so ota_0 starts at the next boundary: 0x20000.
+#
+# Name,     Type, SubType,  Offset,    Size
+nvs,        data, nvs,      0x9000,    0x6000
+otadata,    data, ota,      0xF000,    0x2000
+ota_0,      app,  ota_0,    0x20000,   0x3E0000
+ota_1,      app,  ota_1,    0x400000,  0x3E0000

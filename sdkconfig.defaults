@@ -1,0 +1,44 @@
+# Target
+CONFIG_IDF_TARGET="esp32s3"
+
+# Flash
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# PSRAM (OPI 8MB)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_BOOT_INIT=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=n
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+
+# Cache — wider cache lines improve RGB DMA throughput
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+
+# LVGL colour depth (must match RGB panel bits_per_pixel)
+CONFIG_LV_COLOR_DEPTH_16=y
+
+# Enable Montserrat fonts used by the speedometer UI
+CONFIG_LV_FONT_MONTSERRAT_48=y
+CONFIG_LV_FONT_MONTSERRAT_36=y
+CONFIG_LV_FONT_MONTSERRAT_30=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+
+# Complex drawing required for transform zoom (3× speed digit scaling)
+CONFIG_LV_DRAW_COMPLEX=y
+
+# FreeRTOS tick rate — 1 kHz gives 1 ms resolution for LVGL timers
+CONFIG_FREERTOS_HZ=1000
+
+# Disable legacy I2C driver warning (we use the legacy driver for simplicity)
+CONFIG_I2C_SUPPRESS_DEPRECATE_WARN=y
+
+# Console via USB Serial/JTAG (built into ESP32-S3, uses the USB-C port).
+# This frees GPIO43/GPIO44 (the UART connector) for the CAN transceiver.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_UART_NONE=y

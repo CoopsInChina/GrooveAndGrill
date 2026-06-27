@@ -1,0 +1,8 @@
+dependencies:
+  idf: ">=5.1.0"
+
+  # LVGL + ESP port (handles tick, task, display buffer, vsync)
+  espressif/esp_lvgl_port: "^2.3.0"
+
+  # LVGL itself — pinned to 8.3.x for API stability
+  lvgl/lvgl: "~8.3.0"
