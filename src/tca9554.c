@@ -26,6 +26,7 @@ static esp_err_t write_reg(uint8_t reg, uint8_t val)
                                       pdMS_TO_TICKS(I2C_TIMEOUT_MS));
 }
 
+static esp_err_t read_reg(uint8_t reg, uint8_t *val) __attribute__((unused));
 static esp_err_t read_reg(uint8_t reg, uint8_t *val)
 {
     return i2c_master_write_read_device(IO_I2C_PORT, TCA9554_I2C_ADDR,

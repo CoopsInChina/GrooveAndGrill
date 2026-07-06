@@ -1,3 +1,9 @@
+# macOS metadata
+.DS_Store
+
+# Device-specific saved sdkconfig variants
+sdkconfig.music_meat
+
 # WiFi credentials — never commit this file
 src/wifi_config.h
 

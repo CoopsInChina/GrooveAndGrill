@@ -1,43 +1,68 @@
 #pragma once
 
 // ============================================================
-// Application-level configuration
-// All CAN signal parameters MUST be updated to match your
-// vehicle's CAN database before the firmware will work correctly.
+// Music and Meat — application configuration
 // ============================================================
 
-// ---- CAN bus speed ----
-// Common values: 125000, 250000, 500000, 1000000
-#define CAN_BITRATE_BPS         500000
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION        "0.1.0"
+#endif
 
-// ---- Vehicle speed signal ----
-// Frame containing the wheel/vehicle speed value.
-//
-// Conversion: speed_mph = ((raw * SPEED_SCALE) + SPEED_OFFSET) * KMH_TO_MPH
-// Set KMH_TO_MPH = 1.0f if the raw value is already in mph.
-//
-#define SPEED_CAN_ID            0x4B0U  // 11-bit standard frame ID
-#define SPEED_IS_EXTENDED       false   // true = 29-bit extended frame
-#define SPEED_BYTE_OFFSET       0U      // first byte of the speed value
-#define SPEED_BYTE_COUNT        2U      // 2 = big-endian uint16, 1 = uint8
-#define SPEED_SCALE             0.01f   // raw -> km/h  (e.g. 10000 raw = 100 km/h)
-#define SPEED_OFFSET            0.0f    // km/h additive offset after scaling
-#define KMH_TO_MPH              0.621371f
+// ---- Display ----
+#define DISPLAY_WIDTH           480
+#define DISPLAY_HEIGHT          480
+#define DISPLAY_CIRCLE_R        240     // visible pixel radius
+#define DISPLAY_SAFE_R          210     // keep content inside this radius
 
-// Maximum speed the gauge arc covers (mph)
-#define SPEED_MAX_DISPLAY       199.0f
+// ---- NVS ----
+#define NVS_NAMESPACE           "meatmusic"
+#define NVS_KEY_WIFI_SSID       "wifi_ssid"
+#define NVS_KEY_WIFI_PASS       "wifi_pass"
+#define NVS_KEY_SPEAKER_IP      "spkr_ip"
+#define NVS_KEY_SPEAKER_NAME    "spkr_name"
+#define NVS_KEY_API_SERVER      "api_server"  // cached node-sonos-http-api URL
+#define SONOS_API_PORT          5005
+#define SONOS_API_PROBE_MS      250           // TCP connect timeout per host
+#define NVS_KEY_BRIGHTNESS      "brightness"
+#define NVS_KEY_AUTODIM_SEC     "autodim"
+#define NVS_KEY_FAV_COUNT       "fav_count"
+#define NVS_KEY_FAV_BASE        "fav_"      // keys: fav_0 .. fav_19
 
-// ---- Speed display calibration ----
-// Percentage offset applied after CAN scaling: display = raw_mph * (1 + pct/100)
-// Persisted in NVS; adjusted via the WiFi calibration server.
-#define CAL_MAX_OFFSET_PCT      25.0f   // clamp range: ±25%
+// ---- WiFi STA ----
+#define WIFI_CONNECT_TIMEOUT_MS 15000
+#define WIFI_CONNECT_RETRIES    3
 
-// ---- ComfortEnable signal ----
-// A single bit inside a CAN frame that gates the screen on/off.
-// Screen ON  when the bit transitions 0->1.
-// Screen OFF when the bit transitions 1->0.
-//
-#define COMFORT_CAN_ID          0x3B0U
-#define COMFORT_IS_EXTENDED     false
-#define COMFORT_BYTE_OFFSET     0U
-#define COMFORT_BIT_MASK        0x01U   // isolate the ComfortEnable bit
+// ---- WiFi AP (captive portal for WiFi setup) ----
+#define WIFI_AP_SSID            "MusicMeat-Setup"
+#define WIFI_AP_PASS            ""          // open AP
+#define WIFI_AP_CHANNEL         6
+#define WIFI_AP_MAX_CONN        2
+#define WIFI_AP_IP              "192.168.4.1"
+
+// ---- Sonos ----
+#define SONOS_DISCOVERY_TIMEOUT_MS  8000
+#define SONOS_POLL_INTERVAL_MS      2000
+#define SONOS_MAX_SPEAKERS          16
+
+// ---- Screensaver / auto-dim ----
+#define DEFAULT_AUTODIM_SEC         30
+#define DEFAULT_BRIGHTNESS          80      // percent
+#define DIM_BRIGHTNESS              10      // percent when dimmed
+#define DEFAULT_DIM_ENABLED         true
+#define DEFAULT_SCREENSAVER_ENABLED false
+#define DEFAULT_SCREENSAVER_SEC     300     // 5 minutes
+#define NVS_KEY_DIM_ENABLED         "dim_en"
+#define NVS_KEY_SCREENSAVER_EN      "ss_en"
+#define NVS_KEY_SCREENSAVER_SEC     "ss_sec"
+
+// ---- Favourites ----
+#define MAX_FAVOURITES          20
+#define MAX_DEVICE_FAVOURITES   20
+#define NVS_KEY_DEV_FAV_COUNT   "dfav_cnt"  // u8 stored in NVS
+// Per-entry keys: "dfav_Xn" (name) and "dfav_Xc" (cmd), X = 0..MAX_DEVICE_FAVOURITES-1
+
+// ---- Temperature sensor (SHT40, I2C shared bus) ----
+#define SHT40_I2C_ADDR          0x44
+
+// ---- BBQ probes (future) ----
+#define MAX_BBQ_PROBES          4

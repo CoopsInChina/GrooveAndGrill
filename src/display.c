@@ -47,6 +47,16 @@ void display_set_backlight(bool on)
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LCD_BL_LEDC_CH);
 }
 
+void display_set_brightness(int pct)
+{
+    if (pct < 0)   pct = 0;
+    if (pct > 100) pct = 100;
+    uint32_t max_duty = (1u << LCD_BL_LEDC_RES) - 1;
+    uint32_t duty = (uint32_t)((pct * (int)max_duty) / 100);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LCD_BL_LEDC_CH, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LCD_BL_LEDC_CH);
+}
+
 // ---- ST7701S 3-wire SPI init commands --------------------------------
 // The SPI transaction format used by the Waveshare board:
 //   command_bits=1  (0 = command byte, 1 = data byte)
