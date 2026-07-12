@@ -1,5 +1,6 @@
 #include "cst820.h"
 #include "board_config.h"
+#include "app_config.h"   // DISPLAY_WIDTH / DISPLAY_HEIGHT
 #include "globals.h"
 #include "tca9554.h"
 #include "driver/i2c.h"
@@ -52,20 +53,22 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
         s_pressed = false;
     } else {
         s_nack_count = 0;
-        if ((buf[2] & 0x0F) > 0) {
-            s_x = (lv_coord_t)(((buf[3] & 0x0F) << 8) | buf[4]);
-            s_y = (lv_coord_t)(((buf[5] & 0x0F) << 8) | buf[6]);
+        lv_coord_t x = (lv_coord_t)(((buf[3] & 0x0F) << 8) | buf[4]);
+        lv_coord_t y = (lv_coord_t)(((buf[5] & 0x0F) << 8) | buf[6]);
+        // With auto-sleep disabled the panel is polled continuously and emits
+        // occasional garbage idle frames (finger bit set but coords = 0xFFF).
+        // Only accept a touch when a finger is reported AND the coordinates
+        // land on the panel — otherwise these phantom touches keep resetting
+        // the autodim/screensaver activity timer and can fire stray gestures.
+        bool valid = (buf[2] & 0x0F) > 0 && x < DISPLAY_WIDTH && y < DISPLAY_HEIGHT;
+        if (valid) {
+            s_x = x;
+            s_y = y;
             ESP_LOGI(TAG, "TOUCH x=%d y=%d gesture=0x%02x", s_x, s_y, buf[1]);
-
-            if (g_screen_dimmed) {
-                // First tap only wakes the screen — don't pass to LVGL so
-                // the tap doesn't accidentally fire a button while dark.
-                globals_touch_activity();
-                s_pressed = false;
-            } else {
-                globals_touch_activity();
-                s_pressed = true;
-            }
+            globals_touch_activity();
+            // First tap only wakes the screen when dimmed — don't pass it to
+            // LVGL so it doesn't accidentally fire a button while dark.
+            s_pressed = !g_screen_dimmed;
         } else {
             s_pressed = false;
         }
