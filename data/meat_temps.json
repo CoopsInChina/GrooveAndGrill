@@ -1,0 +1,31 @@
+{
+  "unit": "C",
+  "note": "Target internal temperatures at time of pulling from heat, before rest. Pork should reach a minimum internal temp of 63C followed by a 3 minute rest per USDA guidance",
+  "meats": {
+    "beef": {
+      "levels": [
+        { "label": "Rare",        "target_c": 52 },
+        { "label": "Medium Rare", "target_c": 55 },
+        { "label": "Medium",      "target_c": 60 },
+        { "label": "Medium Well", "target_c": 65 },
+        { "label": "Well Done",   "target_c": 70 }
+      ]
+    },
+    "lamb": {
+      "levels": [
+        { "label": "Rare / UK Minimum",        "target_c": 52 },
+        { "label": "Medium Rare /US Minimum", "target_c": 63 },
+        { "label": "Medium",      "target_c": 71 },
+        { "label": "Medium Well", "target_c": 73 },
+        { "label": "Well Done",   "target_c": 77 }
+      ]
+    },
+    "pork": {
+      "levels": [
+        { "label": "Medium / US Minimum",      "target_c": 63 },
+        { "label": "Medium Well", "target_c": 70 },
+        { "label": "Well Done / UK Minimum",   "target_c": 75 }
+      ]
+    }
+  }
+}

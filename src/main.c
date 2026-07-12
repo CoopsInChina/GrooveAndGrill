@@ -4,6 +4,7 @@
 #include "globals.h"
 #include "wifi_manager.h"
 #include "sonos_controller.h"
+#include "bbq_controller.h"
 #include "weather.h"
 #include "ui_common.h"
 #include "ui_boot.h"
@@ -117,6 +118,7 @@ void app_main(void)
     }
 
     sonos_controller_init();
+    bbq_controller_init();
     bool sonos_ok = false;
     if (wifi_ok) {
         sonos_ok = sonos_controller_discover(SONOS_DISCOVERY_TIMEOUT_MS);

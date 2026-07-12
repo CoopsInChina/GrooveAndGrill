@@ -34,6 +34,8 @@ typedef enum {
     SCREEN_WIFI_SETUP,
     SCREEN_SPEAKER_SETUP,
     SCREEN_BBQ,
+    SCREEN_BBQ_CONFIG,
+    SCREEN_BBQ_DONENESS,
     SCREEN_WIDGETS,
     SCREEN_COUNT
 } screen_id_t;
@@ -59,5 +61,6 @@ void ui_handle_gesture(gesture_cb_t on_left, gesture_cb_t on_right,
 // Standard screen background setup
 void ui_screen_base_style(lv_obj_t *scr);
 
-// Add a standardised 60×60 home button at the top of any screen
-void ui_add_home_btn(lv_obj_t *scr);
+// Add a standardised 60×60 home button at the top of any screen. Returns the
+// button so callers can nudge its position (default align is CENTER, 0, -185).
+lv_obj_t *ui_add_home_btn(lv_obj_t *scr);

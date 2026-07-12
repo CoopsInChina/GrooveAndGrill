@@ -152,8 +152,8 @@ lv_obj_t *ui_wifi_setup_create(void)
     lv_obj_t *title = lv_label_create(s_scr);
     lv_label_set_text(title, "WiFi Setup");
     lv_obj_set_style_text_color(title, COL_ACCENT, 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
-    lv_obj_align(title, LV_ALIGN_CENTER, 40, -185);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_align(title, LV_ALIGN_CENTER, 25, -185);
 
     // Status text (visible when AP not active)
     const char *ssid = wifi_manager_ssid();

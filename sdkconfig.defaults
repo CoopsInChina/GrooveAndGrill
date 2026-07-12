@@ -24,6 +24,18 @@ CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
 # LVGL colour depth (must match RGB panel bits_per_pixel)
 CONFIG_LV_COLOR_DEPTH_16=y
 
+# LVGL's internal object/style memory pool. This is a static buffer in
+# INTERNAL DRAM (separate from the general heap, so heap_caps_get_free_size()
+# can't see it), which means it competes with FreeRTOS task stacks for DRAM.
+# The default 32KB was too small — every screen ever visited eats into it
+# permanently (screens are cached forever; see ui_screen_invalidate() in
+# ui_common.c) and it exhausted (lv_obj_create() returns NULL, crash). But
+# 128KB starved DRAM so the Sonos poll/cmd tasks failed to spawn. Measured
+# worst-case usage across all 12 screens is ~50KB, so 72KB gives headroom
+# while leaving ~60KB DRAM for task stacks. Longer term the fix is to free
+# unused screens or move this pool to PSRAM.
+CONFIG_LV_MEM_SIZE_KILOBYTES=72
+
 # Enable Montserrat fonts used by the Music & Meat UI
 CONFIG_LV_FONT_MONTSERRAT_48=y
 CONFIG_LV_FONT_MONTSERRAT_36=y

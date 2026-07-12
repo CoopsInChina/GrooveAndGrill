@@ -12,11 +12,11 @@
 // Swipe left = next page, swipe right = prev page (or back to menu from About)
 
 #define PAGE_COUNT  5
-#define PAGE_ABOUT          0
-#define PAGE_WIFI           1
-#define PAGE_SPEAKER_SETUP  2
-#define PAGE_OTA            3
-#define PAGE_SCREENSAVER    4
+#define PAGE_WIFI           0
+#define PAGE_SPEAKER_SETUP  1
+#define PAGE_OTA            2
+#define PAGE_SCREENSAVER    3
+#define PAGE_ABOUT          4
 
 static lv_obj_t *s_scr    = NULL;
 static int        s_page  = 0;
@@ -85,16 +85,23 @@ static lv_obj_t *make_page(lv_obj_t *parent, const char *title)
 
 static void build_about_page(lv_obj_t *p)
 {
-    char buf[128];
-    snprintf(buf, sizeof(buf), "Music & Meat\nv%s\n\nWaveshare ESP32-S3\n480\xc3\x97" "480 Round LCD",
-             FIRMWARE_VERSION);
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Groove & Grill\n\nv%s", FIRMWARE_VERSION);
     lv_obj_t *info = lv_label_create(p);
     lv_label_set_text(info, buf);
     lv_obj_set_style_text_color(info, COL_TEXT, 0);
     lv_obj_set_style_text_font(info, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_align(info, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(info, 280);
-    lv_obj_align(info, LV_ALIGN_CENTER, 0, 20);
+    lv_obj_align(info, LV_ALIGN_CENTER, 0, -20);
+
+    lv_obj_t *thanks = lv_label_create(p);
+    lv_label_set_text(thanks, "Special thanks to AngryAngShanghai for the graphical assets");
+    lv_obj_set_style_text_color(thanks, COL_TEXT_DIM, 0);
+    lv_obj_set_style_text_font(thanks, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_align(thanks, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(thanks, 280);
+    lv_obj_align(thanks, LV_ALIGN_CENTER, 0, 65);
 }
 
 static void wifi_btn_cb(lv_event_t *e)
@@ -259,6 +266,9 @@ static lv_obj_t *ss_make_slider(lv_obj_t *parent, int min, int max, int val,
     lv_obj_t *sl = lv_slider_create(parent);
     lv_obj_set_size(sl, 260, 12);
     lv_obj_align(sl, LV_ALIGN_CENTER, 0, cy);
+    // Sliders bubble gestures to the parent by default, so a drag also gets
+    // read as a screen swipe and flips to the next/prev settings page mid-drag.
+    lv_obj_clear_flag(sl, LV_OBJ_FLAG_GESTURE_BUBBLE);
     lv_slider_set_range(sl, min, max);
     lv_slider_set_value(sl, val, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(sl, COL_PANEL,  LV_PART_MAIN);
@@ -309,8 +319,9 @@ lv_obj_t *ui_settings_create(void)
     ui_screen_base_style(s_scr);
     lv_obj_add_event_cb(s_scr, gesture_cb, LV_EVENT_GESTURE, NULL);
 
+    // Order matches the PAGE_* indices above (About moved to the end).
     static const char *titles[PAGE_COUNT] = {
-        "About", "WiFi", "Speaker", "OTA Update", "Screensaver"
+        "WiFi", "Speaker", "OTA Update", "Screensaver", "About"
     };
 
     s_pages[PAGE_ABOUT]         = make_page(s_scr, titles[PAGE_ABOUT]);
@@ -350,6 +361,6 @@ lv_obj_t *ui_settings_create(void)
     // Home button LAST → highest z-order, sits above full-screen page containers.
     ui_add_home_btn(s_scr);
 
-    show_page(PAGE_ABOUT);
+    show_page(PAGE_WIFI);   // land on the first page (About is now last)
     return s_scr;
 }

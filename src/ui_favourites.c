@@ -10,7 +10,6 @@
 #include <string.h>
 
 static lv_obj_t   *s_scr          = NULL;
-static lv_obj_t   *s_idx_lbl      = NULL;
 static lv_obj_t   *s_add_btn      = NULL;
 static lv_obj_t   *s_qr           = NULL;
 static lv_obj_t   *s_qr_url       = NULL;
@@ -20,6 +19,39 @@ static lv_timer_t *s_art_timer     = NULL;
 static int         s_index         = 0;
 static int         s_last_count    = -1;
 static bool        s_gesture_fired = false;
+
+// Page-dot indicator — one dot per favourite slot plus the add slot,
+// matching the settings screen's carousel style.
+static lv_obj_t *s_dots_cont            = NULL;
+static lv_obj_t *s_dots[MAX_FAVOURITES + 1] = {0};
+static int       s_dot_count            = 0;
+
+static void rebuild_dots(int total)
+{
+    if (!s_dots_cont || total == s_dot_count) return;
+    if (total > MAX_FAVOURITES + 1) total = MAX_FAVOURITES + 1;
+
+    lv_obj_clean(s_dots_cont);
+    for (int i = 0; i < total; i++) {
+        lv_obj_t *dot = lv_obj_create(s_dots_cont);
+        lv_obj_set_size(dot, 6, 6);
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(dot, COL_BUTTON, 0);
+        lv_obj_set_style_border_width(dot, 0, 0);
+        lv_obj_set_style_pad_hor(dot, 2, 0);
+        lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        s_dots[i] = dot;
+    }
+    s_dot_count = total;
+}
+
+static void update_dots(int active)
+{
+    for (int i = 0; i < s_dot_count; i++) {
+        if (s_dots[i])
+            lv_obj_set_style_bg_color(s_dots[i], i == active ? COL_ACCENT : COL_BUTTON, 0);
+    }
+}
 
 // ---- Navigation ----------------------------------------------------
 
@@ -113,8 +145,11 @@ static void scr_del_cb(lv_event_t *e)
 {
     if (s_refresh_timer) { lv_timer_del(s_refresh_timer); s_refresh_timer = NULL; }
     if (s_art_timer)     { lv_timer_del(s_art_timer);     s_art_timer     = NULL; }
-    s_scr = s_idx_lbl = NULL;
+    s_scr = NULL;
     s_add_btn = s_qr = s_qr_url = s_art_img = NULL;
+    s_dots_cont = NULL;
+    s_dot_count = 0;
+    memset(s_dots, 0, sizeof(s_dots));
 }
 
 // ---- Create --------------------------------------------------------
@@ -133,21 +168,25 @@ lv_obj_t *ui_favourites_create(void)
     lv_obj_center(s_art_img);
     lv_obj_clear_flag(s_art_img, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
-    // "FAVOURITES" category label — near top, above art
+    // "Favourites" category label — near top, above art
     lv_obj_t *cat = lv_label_create(s_scr);
-    lv_label_set_text(cat, "FAVOURITES");
+    lv_label_set_text(cat, "Favourites");
     lv_obj_set_style_text_color(cat, COL_ACCENT, 0);
-    lv_obj_set_style_text_font(cat, &lv_font_montserrat_16, 0);
-    lv_obj_align(cat, LV_ALIGN_CENTER, 0, -160);
+    lv_obj_set_style_text_font(cat, &lv_font_montserrat_24, 0);
+    lv_obj_align(cat, LV_ALIGN_CENTER, 0, -170);
     lv_obj_clear_flag(cat, LV_OBJ_FLAG_CLICKABLE);
 
-    // Index indicator (e.g. "3 / 8")
-    s_idx_lbl = lv_label_create(s_scr);
-    lv_label_set_text(s_idx_lbl, "");
-    lv_obj_set_style_text_color(s_idx_lbl, COL_TEXT_DIM, 0);
-    lv_obj_set_style_text_font(s_idx_lbl, &lv_font_montserrat_14, 0);
-    lv_obj_align(s_idx_lbl, LV_ALIGN_CENTER, 0, -135);
-    lv_obj_clear_flag(s_idx_lbl, LV_OBJ_FLAG_CLICKABLE);
+    // Page-dot indicator — bottom of screen, one dot per slot
+    s_dots_cont = lv_obj_create(s_scr);
+    lv_obj_set_size(s_dots_cont, 260, 16);
+    lv_obj_align(s_dots_cont, LV_ALIGN_BOTTOM_MID, 0, -30);
+    lv_obj_set_style_bg_opa(s_dots_cont, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_dots_cont, 0, 0);
+    lv_obj_set_style_pad_all(s_dots_cont, 0, 0);
+    lv_obj_set_flex_flow(s_dots_cont, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(s_dots_cont, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(s_dots_cont, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
     // + button — fully centered, 120×120
     s_add_btn = lv_btn_create(s_scr);
@@ -188,8 +227,9 @@ lv_obj_t *ui_favourites_create(void)
 
     ui_favourites_show_index(0);
 
-    // Home button last → topmost z-order
-    ui_add_home_btn(s_scr);
+    // Home button last → topmost z-order. Nudged up a little for spacing.
+    lv_obj_t *home_btn = ui_add_home_btn(s_scr);
+    lv_obj_align(home_btn, LV_ALIGN_CENTER, 0, -198);
     return s_scr;
 }
 
@@ -204,6 +244,9 @@ void ui_favourites_show_index(int index)
     s_last_count = count;
     bool is_add  = (index >= count);
 
+    rebuild_dots(count + 1);
+    update_dots(index);
+
     // Always reset QR to hidden when changing slots
     if (s_qr)     lv_obj_add_flag(s_qr,     LV_OBJ_FLAG_HIDDEN);
     if (s_qr_url) lv_obj_add_flag(s_qr_url, LV_OBJ_FLAG_HIDDEN);
@@ -212,7 +255,6 @@ void ui_favourites_show_index(int index)
         ui_art_request(NULL);
         if (s_art_img) lv_obj_add_flag(s_art_img,   LV_OBJ_FLAG_HIDDEN);
         if (s_add_btn) lv_obj_clear_flag(s_add_btn, LV_OBJ_FLAG_HIDDEN);
-        if (s_idx_lbl) lv_label_set_text(s_idx_lbl, "");
     } else {
         const uint8_t *art_data = sonos_device_fav_art_data(index);
         size_t         art_sz   = sonos_device_fav_art_size(index);
@@ -226,9 +268,5 @@ void ui_favourites_show_index(int index)
         }
 
         if (s_add_btn) lv_obj_add_flag(s_add_btn, LV_OBJ_FLAG_HIDDEN);
-
-        char idx_buf[32];
-        snprintf(idx_buf, sizeof(idx_buf), "%d / %d", index + 1, count);
-        if (s_idx_lbl) lv_label_set_text(s_idx_lbl, idx_buf);
     }
 }

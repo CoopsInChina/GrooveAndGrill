@@ -9,6 +9,8 @@
 #include "ui_wifi_setup.h"
 #include "ui_speaker_setup.h"
 #include "ui_bbq.h"
+#include "ui_bbq_config.h"
+#include "ui_bbq_doneness.h"
 #include "ui_widgets.h"
 
 #include "esp_log.h"
@@ -33,6 +35,8 @@ static screen_create_fn_t s_create_fns[SCREEN_COUNT] = {
     [SCREEN_WIFI_SETUP]    = ui_wifi_setup_create,
     [SCREEN_SPEAKER_SETUP] = ui_speaker_setup_create,
     [SCREEN_BBQ]           = ui_bbq_create,
+    [SCREEN_BBQ_CONFIG]    = ui_bbq_config_create,
+    [SCREEN_BBQ_DONENESS]  = ui_bbq_doneness_create,
     [SCREEN_WIDGETS]       = ui_widgets_create,
 };
 
@@ -40,6 +44,7 @@ void ui_navigate_to(screen_id_t id)
 {
     if (id >= SCREEN_COUNT) return;
 
+    bool first_visit = !s_screens[id];
     if (!s_screens[id]) {
         s_screens[id] = s_create_fns[id]();
         if (!s_screens[id]) {
@@ -50,7 +55,19 @@ void ui_navigate_to(screen_id_t id)
 
     lv_scr_load_anim(s_screens[id], LV_SCR_LOAD_ANIM_FADE_ON, 250, 0, false);
     s_current = id;
-    ESP_LOGI(TAG, "Navigate -> screen %d", id);
+
+    // Screens are cached forever once created (see s_screens[] above), so
+    // LVGL's own object/style pool only trends downward as new screens get
+    // first-visited. That pool (CONFIG_LV_MEM_SIZE_KILOBYTES) is separate
+    // from the general ESP-IDF heap — general DRAM/PSRAM free doesn't move
+    // when LVGL objects are created, so log LVGL's own pool instead.
+    lv_mem_monitor_t mon;
+    lv_mem_monitor(&mon);
+    ESP_LOGI(TAG, "Navigate -> screen %d (%s) — LVGL pool: %u%% used, %u%% frag, "
+             "free: %u bytes (biggest block: %u)",
+             id, first_visit ? "first visit, just created" : "cached",
+             mon.used_pct, mon.frag_pct, (unsigned)mon.free_size,
+             (unsigned)mon.free_biggest_size);
 }
 
 void ui_screen_invalidate(screen_id_t id)
@@ -132,7 +149,7 @@ void ui_screen_base_style(lv_obj_t *scr)
 
 static void home_btn_cb(lv_event_t *e) { ui_navigate_to(SCREEN_MENU); }
 
-void ui_add_home_btn(lv_obj_t *scr)
+lv_obj_t *ui_add_home_btn(lv_obj_t *scr)
 {
     lv_obj_t *btn = lv_btn_create(scr);
     lv_obj_set_size(btn, 60, 60);
@@ -150,4 +167,6 @@ void ui_add_home_btn(lv_obj_t *scr)
     lv_obj_set_style_text_color(lbl, COL_TEXT_DIM, 0);
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(lbl);
+
+    return btn;
 }

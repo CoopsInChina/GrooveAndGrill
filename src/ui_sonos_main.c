@@ -59,8 +59,10 @@ lv_obj_t *ui_sonos_main_create(void)
     lv_obj_add_event_cb(s_scr, screen_tapped_cb, LV_EVENT_CLICKED,  NULL);
     lv_obj_add_event_cb(s_scr, scr_del_cb,       LV_EVENT_DELETE,   NULL);
 
-    // Home button — top centre, created first so art/arc don't cover it
-    ui_add_home_btn(s_scr);
+    // Home button — top centre, created first so art/arc don't cover it.
+    // Nudged up a little to open the top band for the artist name.
+    lv_obj_t *home_btn = ui_add_home_btn(s_scr);
+    lv_obj_align(home_btn, LV_ALIGN_CENTER, 0, -198);
 
     // Active speaker label (below home btn)
     s_speaker_lbl = lv_label_create(s_scr);
@@ -94,7 +96,7 @@ lv_obj_t *ui_sonos_main_create(void)
     // Volume button — bottom centre
     lv_obj_t *vol_btn = lv_btn_create(s_scr);
     lv_obj_set_size(vol_btn, 60, 60);
-    lv_obj_align(vol_btn, LV_ALIGN_CENTER, 0, 185);
+    lv_obj_align(vol_btn, LV_ALIGN_CENTER, 0, 198);
     lv_obj_set_style_radius(vol_btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_opa(vol_btn, LV_OPA_TRANSP, 0);
     lv_obj_set_style_bg_opa(vol_btn, LV_OPA_30, LV_STATE_PRESSED);
@@ -109,7 +111,7 @@ lv_obj_t *ui_sonos_main_create(void)
     lv_obj_set_style_text_font(vol_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(vol_lbl);
 
-    // Track title
+    // Track title — below the album art
     s_title = lv_label_create(s_scr);
     lv_label_set_text(s_title, "Connecting...");
     lv_label_set_long_mode(s_title, LV_LABEL_LONG_SCROLL_CIRCULAR);
@@ -117,18 +119,18 @@ lv_obj_t *ui_sonos_main_create(void)
     lv_obj_set_style_text_color(s_title, COL_TEXT, 0);
     lv_obj_set_style_text_font(s_title, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_align(s_title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_title, LV_ALIGN_CENTER, 0, 110);
+    lv_obj_align(s_title, LV_ALIGN_CENTER, 0, 170);
     lv_obj_clear_flag(s_title, LV_OBJ_FLAG_CLICKABLE);
 
-    // Artist
+    // Artist — above the album art; matches the title's size and colour.
     s_artist = lv_label_create(s_scr);
     lv_label_set_text(s_artist, "");
     lv_label_set_long_mode(s_artist, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_width(s_artist, 280);
-    lv_obj_set_style_text_color(s_artist, COL_TEXT_DIM, 0);
-    lv_obj_set_style_text_font(s_artist, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_artist, COL_TEXT, 0);
+    lv_obj_set_style_text_font(s_artist, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_align(s_artist, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_artist, LV_ALIGN_CENTER, 0, 137);
+    lv_obj_align(s_artist, LV_ALIGN_CENTER, 0, -170);
     lv_obj_clear_flag(s_artist, LV_OBJ_FLAG_CLICKABLE);
 
     // 2 s poll timer

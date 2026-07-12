@@ -81,8 +81,8 @@ lv_obj_t *ui_speaker_setup_create(void)
     lv_obj_t *title = lv_label_create(s_scr);
     lv_label_set_text(title, "Speaker Setup");
     lv_obj_set_style_text_color(title, COL_ACCENT, 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, -100);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, -105);
 
     // Status
     s_status_lbl = lv_label_create(s_scr);

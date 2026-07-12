@@ -40,12 +40,13 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
 
     if (ret != ESP_OK) {
         s_nack_count++;
-        // Every 100 consecutive NACKs (~3 s), re-write scan-mode register inline.
-        // This recovers from the CST820 reverting to interrupt mode after a
-        // power ripple, without spawning a task or touching vTaskDelay.
+        // Every 100 consecutive NACKs (~3 s), re-assert no-auto-sleep. If the
+        // chip glitch-reset and re-enabled sleep, this restores it once it's
+        // responding again (a persistent NACK means it's still asleep and the
+        // write itself NACKs — harmless). No task/vTaskDelay from this context.
         if (s_nack_count % 100 == 0) {
-            esp_err_t wr = cst820_write_reg(0xFA, 0x01);
-            ESP_LOGW(TAG, "CST820 NACK×%d — retried scan mode: %s",
+            esp_err_t wr = cst820_write_reg(0xFE, 0x01);
+            ESP_LOGW(TAG, "CST820 NACK×%d — re-asserted no-sleep: %s",
                      s_nack_count, wr == ESP_OK ? "OK" : esp_err_to_name(wr));
         }
         s_pressed = false;
@@ -94,6 +95,14 @@ void cst820_init(void)
 
     esp_err_t ret = cst820_write_reg(0xFA, 0x01);
     ESP_LOGI(TAG, "CST820 scan mode: %s", ret == ESP_OK ? "OK" : esp_err_to_name(ret));
+
+    // Disable auto-sleep (CST816-family reg 0xFE, DisAutoSleep — any non-zero
+    // value keeps it awake). Without this the controller powers down its scan
+    // engine after a few seconds idle and NACKs every I2C read until touched,
+    // which floods the log and adds wake latency. This device is mains-powered,
+    // so keeping touch always-on costs nothing.
+    ret = cst820_write_reg(0xFE, 0x01);
+    ESP_LOGI(TAG, "CST820 auto-sleep disable: %s", ret == ESP_OK ? "OK" : esp_err_to_name(ret));
 
     uint8_t id_reg = 0x15, chip_id = 0;
     ret = i2c_master_write_read_device(IO_I2C_PORT, TP_I2C_ADDR,

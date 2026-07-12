@@ -19,3 +19,7 @@ src/logo_img.h
 sdkconfig
 dependencies.lock
 managed_components/
+
+# Python bytecode cache
+__pycache__/
+*.pyc

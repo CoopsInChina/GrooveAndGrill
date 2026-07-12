@@ -4,41 +4,32 @@
 #include "lvgl.h"
 #include <stdio.h>
 
-// Forward-declared in img_boot.c (auto-generated from Boot.png)
+// Forward-declared in img_boot.c (auto-generated from assets/Boot.jpg, full 480x480 background)
 LV_IMG_DECLARE(img_boot);
 
-static lv_obj_t *s_scr    = NULL;
-static lv_obj_t *s_arc    = NULL;
-static lv_obj_t *s_status = NULL;
+static lv_obj_t *s_scr       = NULL;
+static lv_obj_t *s_status    = NULL;
+static lv_obj_t *s_status_bg = NULL;
 
-// Three status indicator dots: [0]=WiFi  [1]=Sonos  [2]=Server
-static lv_obj_t *s_dot[3]      = {NULL, NULL, NULL};
-static lv_obj_t *s_dot_lbl[3]  = {NULL, NULL, NULL};
+// Three status icons: [0]=WiFi  [1]=Sonos  [2]=Server
+static lv_obj_t *s_icon[3] = {NULL, NULL, NULL};
 
-// Icon x-offsets: centred at 0, spaced 95px apart
-static const int DOT_X[3] = { -95, 0, 95 };
-static const char *DOT_NAME[3] = { "WiFi", "Sonos", "API" };
+static const char *ICON_SYMBOL[3] = { LV_SYMBOL_WIFI, LV_SYMBOL_AUDIO, LV_SYMBOL_DRIVE };
 
-static void make_dot(int idx)
+// Icon positions, matched to the artwork in assets/Boot.jpg: Sonos sits dead
+// centre on the vinyl/speaker graphic, WiFi and Server flank the grill.
+static const int ICON_X[3] = { -165, 0, 165 };
+static const int ICON_Y[3] = { 6,    0, 6   };
+
+static void make_icon(int idx)
 {
-    // Filled circle used as indicator
-    lv_obj_t *d = lv_obj_create(s_scr);
-    lv_obj_set_size(d, 28, 28);
-    lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(d, COL_TEXT_DIM, 0);
-    lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(d, 0, 0);
-    lv_obj_set_style_pad_all(d, 0, 0);
-    lv_obj_clear_flag(d, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(d, LV_ALIGN_CENTER, DOT_X[idx], 68);
-    s_dot[idx] = d;
-
-    lv_obj_t *lbl = lv_label_create(s_scr);
-    lv_label_set_text(lbl, DOT_NAME[idx]);
-    lv_obj_set_style_text_color(lbl, COL_TEXT_DIM, 0);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_12, 0);
-    lv_obj_align(lbl, LV_ALIGN_CENTER, DOT_X[idx], 96);
-    s_dot_lbl[idx] = lbl;
+    lv_obj_t *ic = lv_label_create(s_scr);
+    lv_label_set_text(ic, ICON_SYMBOL[idx]);
+    lv_obj_set_style_text_color(ic, lv_color_hex(0x444444), 0);
+    lv_obj_set_style_text_font(ic, &lv_font_montserrat_28, 0);
+    lv_obj_align(ic, LV_ALIGN_CENTER, ICON_X[idx], ICON_Y[idx]);
+    lv_obj_clear_flag(ic, LV_OBJ_FLAG_CLICKABLE);
+    s_icon[idx] = ic;
 }
 
 lv_obj_t *ui_boot_create(void)
@@ -46,49 +37,43 @@ lv_obj_t *ui_boot_create(void)
     s_scr = lv_obj_create(NULL);
     ui_screen_base_style(s_scr);
 
-    // ---- Logo ----
-    lv_obj_t *logo = lv_img_create(s_scr);
-    lv_img_set_src(logo, &img_boot);
-    lv_obj_align(logo, LV_ALIGN_CENTER, 0, -70);
-    lv_obj_clear_flag(logo, LV_OBJ_FLAG_CLICKABLE);
+    // ---- Full-screen boot artwork ----
+    lv_obj_t *bg = lv_img_create(s_scr);
+    lv_img_set_src(bg, &img_boot);
+    lv_obj_center(bg);
+    lv_obj_clear_flag(bg, LV_OBJ_FLAG_CLICKABLE);
 
-    // ---- Version ----
+    // ---- Status indicator icons ----
+    make_icon(BOOT_ICON_WIFI);
+    make_icon(BOOT_ICON_SONOS);
+    make_icon(BOOT_ICON_SERVER);
+
+    // ---- Status text — near the bottom, on a translucent backdrop so it
+    // stays legible over the artwork underneath ----
+    s_status_bg = lv_obj_create(s_scr);
+    lv_obj_set_size(s_status_bg, 340, 34);
+    lv_obj_align(s_status_bg, LV_ALIGN_CENTER, 0, 205);
+    lv_obj_set_style_radius(s_status_bg, 8, 0);
+    lv_obj_set_style_bg_color(s_status_bg, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_status_bg, LV_OPA_60, 0);
+    lv_obj_set_style_border_width(s_status_bg, 0, 0);
+    lv_obj_clear_flag(s_status_bg, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+
+    s_status = lv_label_create(s_status_bg);
+    lv_label_set_text(s_status, "Starting...");
+    lv_label_set_long_mode(s_status, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_status, 320);
+    lv_obj_set_style_text_align(s_status, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(s_status, COL_TEXT_DIM, 0);
+    lv_obj_set_style_text_font(s_status, &lv_font_montserrat_14, 0);
+    lv_obj_center(s_status);
+
+    // ---- Version — bottom-right corner, outside the circular artwork ----
     lv_obj_t *ver = lv_label_create(s_scr);
     lv_label_set_text(ver, "v" FIRMWARE_VERSION);
     lv_obj_set_style_text_color(ver, COL_TEXT_DIM, 0);
     lv_obj_set_style_text_font(ver, &lv_font_montserrat_12, 0);
-    lv_obj_align(ver, LV_ALIGN_CENTER, 0, 40);
-
-    // ---- Progress arc (thin ring at screen edge) ----
-    s_arc = lv_arc_create(s_scr);
-    lv_obj_set_size(s_arc, 440, 440);
-    lv_obj_center(s_arc);
-    lv_arc_set_range(s_arc, 0, 100);
-    lv_arc_set_value(s_arc, 0);
-    lv_arc_set_bg_angles(s_arc, 0, 360);
-    lv_arc_set_rotation(s_arc, 270);
-
-    lv_obj_set_style_arc_opa(s_arc, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_arc, COL_ACCENT, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(s_arc, 5, LV_PART_INDICATOR);
-    lv_obj_remove_style(s_arc, NULL, LV_PART_KNOB);
-    lv_obj_clear_flag(s_arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_opa(s_arc, LV_OPA_TRANSP, 0);
-
-    // ---- Status indicator dots ----
-    make_dot(BOOT_ICON_WIFI);
-    make_dot(BOOT_ICON_SONOS);
-    make_dot(BOOT_ICON_SERVER);
-
-    // ---- Status text ----
-    s_status = lv_label_create(s_scr);
-    lv_label_set_text(s_status, "Starting...");
-    lv_label_set_long_mode(s_status, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_status, 300);
-    lv_obj_set_style_text_align(s_status, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(s_status, COL_TEXT_DIM, 0);
-    lv_obj_set_style_text_font(s_status, &lv_font_montserrat_14, 0);
-    lv_obj_align(s_status, LV_ALIGN_CENTER, 0, 130);
+    lv_obj_align(ver, LV_ALIGN_CENTER, 175, 195);
 
     lv_scr_load(s_scr);
     return s_scr;
@@ -104,9 +89,9 @@ void ui_boot_show(void)
 
 void ui_boot_set_status(const char *msg, int progress_pct)
 {
+    (void)progress_pct;
     if (!s_scr) return;
     if (s_status) lv_label_set_text(s_status, msg);
-    if (s_arc)    lv_arc_set_value(s_arc, progress_pct);
     lv_refr_now(NULL);
 }
 
@@ -117,9 +102,8 @@ void ui_boot_set_icon(int idx, int state)
     switch (state) {
         case BOOT_STATE_OK:   col = COL_ACCENT;                  break;
         case BOOT_STATE_FAIL: col = lv_color_hex(0xFF3333);      break;
-        default:              col = COL_TEXT_DIM;                break;
+        default:              col = lv_color_hex(0x444444);      break;
     }
-    if (s_dot[idx])     lv_obj_set_style_bg_color(s_dot[idx], col, 0);
-    if (s_dot_lbl[idx]) lv_obj_set_style_text_color(s_dot_lbl[idx], col, 0);
+    if (s_icon[idx]) lv_obj_set_style_text_color(s_icon[idx], col, 0);
     lv_refr_now(NULL);
 }

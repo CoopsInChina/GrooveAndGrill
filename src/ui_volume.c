@@ -73,6 +73,14 @@ static void timeout_cb(lv_timer_t *t)
     go_sonos();
 }
 
+// Re-sync with the speaker's actual volume every time this screen is
+// entered — screens are cached/reused, so without this the arc would just
+// show whatever s_volume last held (or the 50 default on first visit).
+static void scr_loaded_cb(lv_event_t *e)
+{
+    ui_volume_update();
+}
+
 static void scr_del_cb(lv_event_t *e)
 {
     if (s_timeout_timer) {
@@ -88,14 +96,18 @@ lv_obj_t *ui_volume_create(void)
 {
     s_scr = lv_obj_create(NULL);
     ui_screen_base_style(s_scr);
-    lv_obj_add_event_cb(s_scr, gesture_cb,   LV_EVENT_GESTURE, NULL);
-    lv_obj_add_event_cb(s_scr, any_touch_cb, LV_EVENT_PRESSED, NULL);
-    lv_obj_add_event_cb(s_scr, scr_del_cb,   LV_EVENT_DELETE,  NULL);
+    lv_obj_add_event_cb(s_scr, gesture_cb,    LV_EVENT_GESTURE,       NULL);
+    lv_obj_add_event_cb(s_scr, any_touch_cb,  LV_EVENT_PRESSED,       NULL);
+    lv_obj_add_event_cb(s_scr, scr_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+    lv_obj_add_event_cb(s_scr, scr_del_cb,    LV_EVENT_DELETE,        NULL);
 
     // Volume arc — draggable or press-to-set; 270° open at bottom
     s_arc = lv_arc_create(s_scr);
     lv_obj_set_size(s_arc, 380, 380);
     lv_obj_center(s_arc);
+    // Draggable widgets bubble gestures to the parent by default, so a drag
+    // could also register as a screen swipe (go_sonos() on RIGHT) mid-drag.
+    lv_obj_clear_flag(s_arc, LV_OBJ_FLAG_GESTURE_BUBBLE);
     lv_arc_set_range(s_arc, 0, 100);
     lv_arc_set_value(s_arc, s_volume);
     lv_arc_set_bg_angles(s_arc, 135, 405);
@@ -114,8 +126,8 @@ lv_obj_t *ui_volume_create(void)
     lv_obj_t *title = lv_label_create(s_scr);
     lv_label_set_text(title, "VOLUME");
     lv_obj_set_style_text_color(title, COL_TEXT_DIM, 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_12, 0);
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, -55);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, -65);
 
     // Volume number
     s_vol_lbl = lv_label_create(s_scr);
@@ -151,6 +163,9 @@ lv_obj_t *ui_volume_create(void)
     // 10 s inactivity → return to music screen
     s_timeout_timer = lv_timer_create(timeout_cb, 10000, NULL);
     lv_timer_set_repeat_count(s_timeout_timer, 1);
+
+    // Seed with the speaker's actual volume before this ever renders.
+    ui_volume_update();
 
     return s_scr;
 }
