@@ -44,6 +44,15 @@
 #define SONOS_POLL_INTERVAL_MS      2000
 #define SONOS_MAX_SPEAKERS          16
 
+// Spotify service parameters for direct (server-free) favourite playback.
+// sid = the Spotify service id on this Sonos household; sn = account serial.
+// These are learned automatically from any playing Spotify track's URI and
+// cached; the defaults below match the current system so playback works
+// before anything has played. serviceType is derived as (sid<<8)+7.
+// Only individual tracks need sn — playlists/albums need only the sid.
+#define SPOTIFY_DEFAULT_SID         12
+#define SPOTIFY_DEFAULT_SN          5
+
 // ---- Screensaver / auto-dim ----
 #define DEFAULT_AUTODIM_SEC         30
 #define DEFAULT_BRIGHTNESS          80      // percent

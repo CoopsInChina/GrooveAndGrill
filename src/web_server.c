@@ -129,6 +129,19 @@ static bool build_cmd_from_structured(const char *source, const char *type,
 {
     if (!id || !id[0]) return false;
 
+    // Sanitise the id: drop any ?query (e.g. Spotify's ?si= share tag) and
+    // trailing whitespace that can arrive when a full/pasted id is entered.
+    char clean_id[96];
+    snprintf(clean_id, sizeof(clean_id), "%s", id);
+    char *qp = strpbrk(clean_id, "?&");
+    if (qp) *qp = '\0';
+    for (int i = (int)strlen(clean_id) - 1;
+         i >= 0 && (clean_id[i] == '\n' || clean_id[i] == '\r' ||
+                    clean_id[i] == ' '  || clean_id[i] == '\t'); i--)
+        clean_id[i] = '\0';
+    id = clean_id;
+    if (!id[0]) return false;
+
     if (strcmp(source, "spotify") == 0) {
         const char *api_type = type;  // playlist / album / track
         snprintf(cmd_out, cmd_sz, "spotify/now/spotify:%s:%s", api_type, id);

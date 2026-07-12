@@ -47,7 +47,7 @@ static inline uint32_t ms_now(void) {
 // ---- State ---------------------------------------------------------
 
 #define SOAP_RESP_BUF_SZ    4096
-#define SOAP_BODY_BUF_SZ    2048
+#define SOAP_BODY_BUF_SZ    3072   // AddURIToQueue body carries encoded metadata
 #define HTTP_RESP_BUF_SZ    4096
 #define MAX_DEVICES         SONOS_MAX_SPEAKERS
 
@@ -70,10 +70,17 @@ static EXT_RAM_BSS_ATTR char s_fav_names[MAX_FAVOURITES][64];
 static EXT_RAM_BSS_ATTR char s_fav_art[MAX_FAVOURITES][256];
 static int  s_fav_count = 0;
 
-// Device-stored custom favourites (NVS), played via API command path
+// Device-stored custom favourites (NVS). cmd is the node-sonos-http-api command
+// (e.g. "spotify/now/spotify:playlist:<id>"); played directly via SOAP when
+// possible, falling back to the API server otherwise.
 static EXT_RAM_BSS_ATTR char s_dev_fav_names[MAX_DEVICE_FAVOURITES][64];
 static EXT_RAM_BSS_ATTR char s_dev_fav_cmds[MAX_DEVICE_FAVOURITES][256];
 static int  s_dev_fav_count = 0;
+
+// Spotify service params for direct favourite playback — learned from a playing
+// Spotify track URI (see update_track_info), defaulting to this system's values.
+static int  s_spotify_sid = SPOTIFY_DEFAULT_SID;
+static int  s_spotify_sn  = SPOTIFY_DEFAULT_SN;
 
 // Art cache: JPEG bytes per custom favourite, loaded from SPIFFS into PSRAM at boot.
 // 20 × 25 KB = 500 KB PSRAM — fine on 8 MB PSRAM board.
@@ -113,6 +120,25 @@ static bool extract_xml(const char *xml, const char *tag, char *out, size_t out_
     memcpy(out, s, len);
     out[len] = '\0';
     return true;
+}
+
+// XML-entity-encode a value for inclusion in a SOAP argument body. Needed for
+// URIs (contain '&') and DIDL metadata (contains '<','>','&') passed to
+// AddURIToQueue / SetAVTransportURI.
+static void xml_encode(const char *src, char *dst, size_t dst_sz)
+{
+    size_t o = 0;
+    for (const char *p = src; *p && o + 6 < dst_sz; p++) {
+        switch (*p) {
+            case '&':  memcpy(dst + o, "&amp;",  5); o += 5; break;
+            case '<':  memcpy(dst + o, "&lt;",   4); o += 4; break;
+            case '>':  memcpy(dst + o, "&gt;",   4); o += 4; break;
+            case '"':  memcpy(dst + o, "&quot;", 6); o += 6; break;
+            case '\'': memcpy(dst + o, "&apos;", 6); o += 6; break;
+            default:   dst[o++] = *p; break;
+        }
+    }
+    dst[o] = '\0';
 }
 
 static void decode_html_entities(char *s)
@@ -298,7 +324,10 @@ static int send_soap(const char *service, const char *action,
 
 // ---- Room name fetch -----------------------------------------------
 
-static void fetch_room_name(const char *ip, char *name_buf, size_t name_sz)
+// Fetches roomName and the RINCON uuid from the player's device description.
+// uuid_buf may be NULL if not needed.
+static void fetch_room_name(const char *ip, char *name_buf, size_t name_sz,
+                            char *uuid_buf, size_t uuid_sz)
 {
     static char url[128];
     snprintf(url, sizeof(url), "http://%s:1400/xml/device_description.xml", ip);
@@ -319,10 +348,20 @@ static void fetch_room_name(const char *ip, char *name_buf, size_t name_sz)
     int code      = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);
 
-    if (err == ESP_OK && code == 200)
+    if (err == ESP_OK && code == 200) {
         extract_xml(resp, "roomName", name_buf, name_sz);
-    else
+        if (uuid_buf && uuid_sz) {
+            // <UDN>uuid:RINCON_XXXXXXXXXXXX01400</UDN> — strip the "uuid:" prefix.
+            char udn[64] = {0};
+            if (extract_xml(resp, "UDN", udn, sizeof(udn))) {
+                const char *r = strstr(udn, "RINCON");
+                strncpy(uuid_buf, r ? r : udn, uuid_sz - 1);
+                uuid_buf[uuid_sz - 1] = '\0';
+            }
+        }
+    } else {
         strncpy(name_buf, ip, name_sz - 1);
+    }
 }
 
 // ---- Discovery (SSDP via lwip UDP) ---------------------------------
@@ -439,7 +478,8 @@ bool sonos_controller_discover(uint32_t timeout_ms)
         ESP_LOGI(TAG, "Discovery: SSDP found 0, probing NVS IP %s", saved_ip);
         memset(&s_speakers[0], 0, sizeof(s_speakers[0]));
         strncpy(s_speakers[0].ip, saved_ip, sizeof(s_speakers[0].ip) - 1);
-        fetch_room_name(saved_ip, s_speakers[0].name, sizeof(s_speakers[0].name));
+        fetch_room_name(saved_ip, s_speakers[0].name, sizeof(s_speakers[0].name),
+                        s_speakers[0].uuid, sizeof(s_speakers[0].uuid));
         s_speakers[0].connected   = true;
         s_speakers[0].error_count = 0;
         s_speaker_count = 1;
@@ -449,11 +489,13 @@ bool sonos_controller_discover(uint32_t timeout_ms)
         return true;
     }
 
-    // Fetch room names
+    // Fetch room names + uuids
     for (int i = 0; i < s_speaker_count; i++) {
         fetch_room_name(s_speakers[i].ip,
-                        s_speakers[i].name, sizeof(s_speakers[i].name));
-        ESP_LOGI(TAG, "  [%d] %s (%s)", i, s_speakers[i].name, s_speakers[i].ip);
+                        s_speakers[i].name, sizeof(s_speakers[i].name),
+                        s_speakers[i].uuid, sizeof(s_speakers[i].uuid));
+        ESP_LOGI(TAG, "  [%d] %s (%s) %s", i, s_speakers[i].name,
+                 s_speakers[i].ip, s_speakers[i].uuid);
     }
 
     // Restore cached speaker from NVS
@@ -493,6 +535,15 @@ static void update_track_info(void)
     char rel_time[16]   = {0};
     char duration[16]   = {0};
     extract_xml(resp, "TrackURI",       uri,       sizeof(uri));
+
+    // Learn Spotify service params from a playing Spotify track URI, e.g.
+    // x-sonos-spotify:spotify%3atrack%3a...?sid=12&flags=8232&sn=5
+    if (strstr(uri, "x-sonos-spotify")) {
+        const char *p;
+        if ((p = strstr(uri, "sid=")) != NULL) { int v = atoi(p + 4); if (v > 0) s_spotify_sid = v; }
+        if ((p = strstr(uri, "sn="))  != NULL) { int v = atoi(p + 3); if (v > 0) s_spotify_sn  = v; }
+    }
+
     extract_xml(resp, "TrackMetaData",  meta_raw,  sizeof(meta_raw));
     extract_xml(resp, "RelTime",        rel_time,  sizeof(rel_time));
     extract_xml(resp, "TrackDuration",  duration,  sizeof(duration));
@@ -802,11 +853,128 @@ static bool fetch_favourites(void)
     return true;
 }
 
+// Builds the Sonos URI + DIDL metadata for a Spotify favourite command such as
+// "spotify/now/spotify:playlist:<id>". Mirrors node-sonos-http-api's spotify
+// action. Returns false for non-Spotify commands (caller falls back to server).
+//   - playlist/album: x-rincon-cpcontainer container URI (needs only serviceType)
+//   - track:          x-sonos-spotify URI (needs sid + sn)
+static bool build_spotify_uri_meta(const char *cmd, char *uri, size_t uri_sz,
+                                    char *meta, size_t meta_sz)
+{
+    const char *sp = strstr(cmd, "spotify:");
+    if (!sp) return false;   // not a Spotify command (e.g. applemusic)
+
+    char type[16] = {0}, id[128] = {0};
+    if (sscanf(sp, "spotify:%15[^:]:%127s", type, id) != 2) return false;
+
+    // Strip a Spotify share query (?si=...) and any trailing junk (e.g. an
+    // encoded newline) that may have been captured when the favourite was
+    // added via the web page — the bare id is all Sonos needs.
+    char *q = strpbrk(id, "?&");
+    if (q) *q = '\0';
+
+    int stype = (s_spotify_sid << 8) + 7;
+
+    // "spotify:TYPE:ID" url-encoded the way Sonos expects (colons -> %3a).
+    char enc[192];
+    snprintf(enc, sizeof(enc), "spotify%%3a%s%%3a%s", type, id);
+
+    if (strcmp(type, "track") == 0) {
+        snprintf(uri, uri_sz, "x-sonos-spotify:%s?sid=%d&flags=8224&sn=%d",
+                 enc, s_spotify_sid, s_spotify_sn);
+    } else if (strcmp(type, "album") == 0) {
+        snprintf(uri, uri_sz, "x-rincon-cpcontainer:0004206c%s", enc);
+    } else if (strcmp(type, "playlist") == 0) {
+        snprintf(uri, uri_sz, "x-rincon-cpcontainer:0006206c%s", enc);
+    } else {
+        return false;
+    }
+
+    snprintf(meta, meta_sz,
+        "<DIDL-Lite xmlns:dc=\"http://purl.org/dc/elements/1.1/\" "
+        "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" "
+        "xmlns:r=\"urn:schemas-rinconnetworks-com:metadata-1-0/\" "
+        "xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\">"
+        "<item id=\"00030020%s\" restricted=\"true\">"
+        "<upnp:class>object.item.audioItem.musicTrack</upnp:class>"
+        "<desc id=\"cdudn\" nameSpace=\"urn:schemas-rinconnetworks-com:metadata-1-0/\">"
+        "SA_RINCON%d_X_#Svc%d-0-Token</desc></item></DIDL-Lite>",
+        enc, stype, stype);
+    return true;
+}
+
+// Plays a custom (device) favourite directly via SOAP, no external server.
+// Sequence mirrors replaceWithFavorite's non-radio path: clear queue, enqueue
+// the favourite, point the transport at the queue, play. Returns false if it
+// couldn't be handled directly (caller falls back to the API server).
+static bool play_custom_favourite_direct(int di)
+{
+    if (di < 0 || di >= s_dev_fav_count) return false;
+    const char *uuid = s_speakers[s_active_idx].uuid;
+    if (!uuid[0]) return false;   // no queue URI possible without the RINCON id
+
+    static char uri[256], meta[768];
+    if (!build_spotify_uri_meta(s_dev_fav_cmds[di], uri, sizeof(uri), meta, sizeof(meta)))
+        return false;
+
+    static char uri_enc[512], meta_enc[1536], args[3072], resp[512];
+
+    send_soap("AVTransport", "RemoveAllTracksFromQueue",
+              "<InstanceID>0</InstanceID>", resp, sizeof(resp));
+
+    xml_encode(uri,  uri_enc,  sizeof(uri_enc));
+    xml_encode(meta, meta_enc, sizeof(meta_enc));
+    snprintf(args, sizeof(args),
+        "<InstanceID>0</InstanceID><EnqueuedURI>%s</EnqueuedURI>"
+        "<EnqueuedURIMetaData>%s</EnqueuedURIMetaData>"
+        "<DesiredFirstTrackNumberEnqueued>0</DesiredFirstTrackNumberEnqueued>"
+        "<EnqueueAsNext>0</EnqueueAsNext>",
+        uri_enc, meta_enc);
+    if (send_soap("AVTransport", "AddURIToQueue", args, resp, sizeof(resp)) != 200)
+        return false;
+
+    // Diagnostic: how many tracks actually landed in the queue.
+    char added[8] = {0}, qlen[8] = {0};
+    extract_xml(resp, "NumTracksAdded", added, sizeof(added));
+    extract_xml(resp, "NewQueueLength", qlen,  sizeof(qlen));
+    ESP_LOGI(TAG, "AddURIToQueue: added=%s newLen=%s", added, qlen);
+
+    snprintf(args, sizeof(args),
+        "<InstanceID>0</InstanceID>"
+        "<CurrentURI>x-rincon-queue:%s#0</CurrentURI><CurrentURIMetaData></CurrentURIMetaData>",
+        uuid);
+    send_soap("AVTransport", "SetAVTransportURI", args, resp, sizeof(resp));
+
+    // Position the queue at the first enqueued track — a freshly-swapped queue
+    // otherwise sits before track 1 and Play does nothing.
+    send_soap("AVTransport", "Seek",
+              "<InstanceID>0</InstanceID><Unit>TRACK_NR</Unit><Target>1</Target>",
+              resp, sizeof(resp));
+
+    int play_code = send_soap("AVTransport", "Play",
+                              "<InstanceID>0</InstanceID><Speed>1</Speed>",
+                              resp, sizeof(resp));
+
+    ESP_LOGI(TAG, "Play custom fav[%d] direct: %s (play=%d) %s",
+             di, s_dev_fav_names[di], play_code, uri);
+    return true;
+}
+
 static void do_play_favourite(int index)
 {
     int total = s_fav_count + s_dev_fav_count;
-    if (!g_api_server[0] || s_active_idx < 0 ||
-        index < 0 || index >= total) return;
+    if (s_active_idx < 0 || index < 0 || index >= total) return;
+
+    // Custom favourites: try direct SOAP playback first (no external server).
+    if (index >= s_fav_count) {
+        if (play_custom_favourite_direct(index - s_fav_count)) return;
+        // else fall through to the API server path (e.g. Apple Music, or no uuid)
+    }
+
+    if (!g_api_server[0]) {
+        ESP_LOGW(TAG, "Play favourite[%d]: no direct path and no API server", index);
+        return;
+    }
 
     char room_enc[128];
     url_encode_room(s_speakers[s_active_idx].name, room_enc, sizeof(room_enc));

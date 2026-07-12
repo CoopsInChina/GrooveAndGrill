@@ -181,3 +181,44 @@ Reference sources (local clones, not committed):
 key files `lib/helpers/soap.js`, `lib/models/Player.js`,
 `lib/prototypes/Player/replaceWithFavorite.js`,
 `lib/prototypes/SonosSystem/getFavorites.js`.
+
+---
+
+## 5. Implemented (custom/device favourites)
+
+Direct, server-free playback of **custom Spotify favourites** is done in
+`sonos_controller.c`:
+
+- Speaker **UUID** captured from `device_description.xml` `<UDN>` (for the
+  `x-rincon-queue:<UUID>#0` uri).
+- **sid/sn learned** from any playing Spotify track URI, defaulting to this
+  system's values (`SPOTIFY_DEFAULT_SID`/`SN` in `app_config.h`);
+  serviceType = `(sid<<8)+7`.
+- `build_spotify_uri_meta()` maps `spotify:TYPE:ID` → Sonos uri + DIDL metadata
+  (playlist/album → `x-rincon-cpcontainer`; track → `x-sonos-spotify`), stripping
+  any `?si=` share query off the id. `web_server.c` now also strips it at add-time.
+- `play_custom_favourite_direct()` does: `RemoveAllTracksFromQueue` →
+  `AddURIToQueue` → `SetAVTransportURI(x-rincon-queue:UUID#0)` →
+  **`Seek TRACK_NR 1`** → `Play`. The seek is essential: a freshly-swapped queue
+  sits before track 1 and `Play` is a no-op without it (this was the
+  "art shows but nothing plays" bug).
+- `do_play_favourite()` tries the direct path first for custom favourites and
+  falls back to the API server only when it can't (Apple Music, or no UUID).
+
+### Verified
+- **Spotify playlist** — ✅ (120-track playlist queued and played).
+
+### Tests still needed
+- **Spotify album** (`x-rincon-cpcontainer:0004206c…` — different container
+  prefix from playlist).
+- **Spotify single track** (`x-sonos-spotify:…?sid=&flags=8224&sn=` — the only
+  path that depends on `sn`; confirm `flags=8224` is right, and that it works
+  both before and after `sn` is learned from a playing track).
+- **Apple Music** custom favourites — currently fall back to the server; direct
+  path not yet built (would need the Apple Music uri/metadata templates).
+- **Cold-start** custom-favourite play before any Spotify track has played
+  (i.e. relying on the `SPOTIFY_DEFAULT_*` values).
+
+### Not yet server-free
+- **Listing** built-in Sonos favourites (`Browse FV:2` name source) — see §4.
+- **Apple Music** custom favourite playback.
