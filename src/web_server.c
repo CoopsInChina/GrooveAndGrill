@@ -172,7 +172,7 @@ static const char HTML_HEAD[] =
     "<!DOCTYPE html><html><head>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
     "<meta charset='utf-8'>"
-    "<title>Music &amp; Meat</title>"
+    "<title>Groove &amp; Grill</title>"
     "<style>"
     "body{font-family:system-ui,sans-serif;background:#111;color:#eee;"
          "max-width:520px;margin:0 auto;padding:16px 12px}"
@@ -229,7 +229,7 @@ static const char HTML_HEAD[] =
     "</style></head><body>";
 
 static const char HTML_TAIL[] =
-    "<p class='footer'>Music &amp; Meat &mdash; setup</p></body></html>";
+    "<p class='footer'>Groove &amp; Grill &mdash; setup</p></body></html>";
 
 // ---- GET /setup -----------------------------------------------------
 
@@ -237,7 +237,7 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_sendstr_chunk(req, HTML_HEAD);
-    httpd_resp_sendstr_chunk(req, "<h1>Music &amp; Meat</h1><h2>Favourites &amp; Setup</h2>");
+    httpd_resp_sendstr_chunk(req, "<h1>Groove &amp; Grill</h1><h2>Favourites &amp; Setup</h2>");
 
     // --- Sonos built-in favourites ---
     httpd_resp_sendstr_chunk(req, "<h3>Sonos Favourites</h3>");
@@ -316,10 +316,6 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
             "<input type='text' id='sid' placeholder='37i9dQZF1EVJSvZp5AOML2'>"
           "</div>"
         "</div>"
-        "<label>Name (shown on device)</label>"
-        "<input type='text' id='sname' placeholder='Leave blank to auto-generate'>"
-        "<label>Art image URL <span style='color:#555'>(optional — Spotify auto-fetches)</span></label>"
-        "<input type='text' id='sart' placeholder='https://...'>"
         "<button id='btn-s' class='add-btn' type='button' onclick='submitStructured()'>+ Add</button>"
         "</div>"
 
@@ -329,10 +325,6 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
         "<label>Share URL</label>"
         "<input type='text' id='url' "
           "placeholder='https://open.spotify.com/playlist/37i9dQZF1EVJSvZp5AOML2'>"
-        "<label>Name (shown on device)</label>"
-        "<input type='text' id='uname' placeholder='Leave blank to auto-generate'>"
-        "<label>Art image URL <span style='color:#555'>(optional — Spotify auto-fetches)</span></label>"
-        "<input type='text' id='uart' placeholder='https://...'>"
         "<button id='btn-u' class='add-btn' type='button' onclick='submitUrl()'>+ Add from URL</button>"
         "</div>"
 
@@ -408,36 +400,32 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
           "var src=document.getElementById('src').value;"
           "var typ=document.getElementById('typ').value;"
           "var id=document.getElementById('sid').value.trim();"
-          "var nm=document.getElementById('sname').value.trim();"
-          "var art=document.getElementById('sart').value.trim();"
           "if(!id){setBusy('btn-s',false);setStatus('');alert('Please enter an ID');return;}"
-          "var params={source_type_id:src+'|'+typ+'|'+id,name:nm};"
-          "if(!nm&&src==='spotify'){"
+          "var params={source_type_id:src+'|'+typ+'|'+id,name:''};"
+          "if(src==='spotify'){"
             "setStatus('Looking up Spotify info…');"
             "var spUrl='https://open.spotify.com/'+typ+'/'+id;"
             "resolveSpotify(spUrl,function(t,thumb){"
               "params.name=t;"
-              "doAdd('/add_structured',params,art||thumb,'btn-s');"
+              "doAdd('/add_structured',params,thumb,'btn-s');"
             "});"
           "}else{"
-            "doAdd('/add_structured',params,art,'btn-s');"
+            "doAdd('/add_structured',params,'','btn-s');"
           "}"
         "}"
         "function submitUrl(){"
           "setBusy('btn-u',true);setStatus('Working…');"
           "var url=document.getElementById('url').value.trim();"
-          "var nm=document.getElementById('uname').value.trim();"
-          "var art=document.getElementById('uart').value.trim();"
           "if(!url){setBusy('btn-u',false);setStatus('');alert('Please enter a URL');return;}"
-          "var params={url:url,name:nm};"
-          "if(!nm&&url.indexOf('open.spotify.com')!==-1){"
+          "var params={url:url,name:''};"
+          "if(url.indexOf('open.spotify.com')!==-1){"
             "setStatus('Looking up Spotify info…');"
             "resolveSpotify(url,function(t,thumb){"
               "params.name=t;"
-              "doAdd('/add_by_url',params,art||thumb,'btn-u');"
+              "doAdd('/add_by_url',params,thumb,'btn-u');"
             "});"
           "}else{"
-            "doAdd('/add_by_url',params,art,'btn-u');"
+            "doAdd('/add_by_url',params,'','btn-u');"
           "}"
         "}"
         "</script>");
