@@ -21,5 +21,6 @@ idf_component_register(
         esp_lvgl_port
         json
         spiffs
+        bt
 )
 
