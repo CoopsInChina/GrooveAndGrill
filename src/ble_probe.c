@@ -6,6 +6,7 @@
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
 #include "host/ble_gap.h"
+#include "host/ble_gatt.h"
 #include "host/util/util.h"
 #include "os/os_mbuf.h"
 #include "freertos/FreeRTOS.h"
