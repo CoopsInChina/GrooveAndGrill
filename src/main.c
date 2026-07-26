@@ -183,11 +183,13 @@ void app_main(void)
     }
 
     // ── Background tasks ──────────────────────────────────────────────
+    // BLE first: the controller allocates a chunk of internal DRAM at init, so
+    // grab it before the Sonos poll/cmd task stacks (~12 KB) claim their share.
+    ble_probe_init();
     ui_art_init();
     weather_init();
     sonos_controller_start_polling();
     wifi_manager_start_monitor();
-    ble_probe_init();   // passive BLE scan for wireless meat probes (after WiFi)
 
     // Autodim check timer — fires every 3s (identical to SonosESP main loop cadence)
     TimerHandle_t autodim_timer = xTimerCreate("autodim", pdMS_TO_TICKS(3000),
