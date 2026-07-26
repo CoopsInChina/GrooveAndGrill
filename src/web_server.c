@@ -1,5 +1,6 @@
 #include "web_server.h"
 #include "sonos_controller.h"
+#include "ble_probe.h"
 #include "wifi_manager.h"
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
@@ -604,6 +605,50 @@ static esp_err_t root_handler(httpd_req_t *req)
     return httpd_resp_send(req, NULL, 0);
 }
 
+// ---- BBQ probe debug page (live temps for verification) ------------
+
+static esp_err_t bbq_data_handler(httpd_req_t *req)
+{
+    float t = 0;
+    bool ok  = ble_probe_get(&t);
+    uint32_t age = ble_probe_age_ms();
+    char json[160];
+    snprintf(json, sizeof(json),
+             "{\"connected\":%s,\"temp_ok\":%s,\"temp_c\":%.1f,\"age_s\":%lu}",
+             ble_probe_connected() ? "true" : "false", ok ? "true" : "false", t,
+             (age == UINT32_MAX) ? 0UL : (unsigned long)(age / 1000));
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, json);
+}
+
+static esp_err_t bbq_get_handler(httpd_req_t *req)
+{
+    static const char PAGE[] =
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>BBQ Probe</title><style>"
+        "body{font-family:-apple-system,sans-serif;background:#111;color:#eee;"
+        "text-align:center;padding:32px 16px}"
+        "h1{color:#e87722;font-size:1.2em}"
+        "#t{font-size:4em;font-weight:700;margin:8px 0}"
+        "#s{color:#888}.ok{color:#1ed760}.bad{color:#ff5555}"
+        "</style></head><body>"
+        "<h1>BBQ Probe &mdash; live</h1>"
+        "<div id='t'>&mdash;</div><div id='s'>connecting&hellip;</div>"
+        "<script>"
+        "function tick(){fetch('/bbq_data').then(r=>r.json()).then(d=>{"
+          "var t=document.getElementById('t'),s=document.getElementById('s');"
+          "if(d.connected&&d.temp_ok){t.textContent=d.temp_c.toFixed(1)+' \\u00b0C';"
+            "t.className='ok';s.textContent='connected \\u00b7 updated '+d.age_s+'s ago';}"
+          "else if(d.connected){t.textContent='&mdash;';s.textContent='connected, waiting for data\\u2026';}"
+          "else{t.textContent='&mdash;';t.className='bad';s.textContent='not connected \\u2014 scanning\\u2026';}"
+        "}).catch(function(){});}"
+        "setInterval(tick,1000);tick();"
+        "</script></body></html>";
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, PAGE, HTTPD_RESP_USE_STRLEN);
+}
+
 // ---- Public API -----------------------------------------------------
 
 bool web_server_start(void)
@@ -628,8 +673,10 @@ bool web_server_start(void)
         { .uri = "/add_by_url",    .method = HTTP_POST, .handler = add_by_url_handler      },
         { .uri = "/del_custom",    .method = HTTP_POST, .handler = del_custom_handler      },
         { .uri = "/upload_art",    .method = HTTP_POST, .handler = upload_art_handler      },
+        { .uri = "/bbq",           .method = HTTP_GET,  .handler = bbq_get_handler         },
+        { .uri = "/bbq_data",      .method = HTTP_GET,  .handler = bbq_data_handler        },
     };
-    for (int i = 0; i < 7; i++)
+    for (int i = 0; i < (int)(sizeof(uris) / sizeof(uris[0])); i++)
         httpd_register_uri_handler(s_server, &uris[i]);
 
     ESP_LOGI(TAG, "Setup server: http://%s/setup", wifi_manager_ip());
