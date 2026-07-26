@@ -7,6 +7,7 @@
 #include "host/ble_hs.h"
 #include "host/ble_gap.h"
 #include "host/util/util.h"
+#include "os/os_mbuf.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <string.h>
@@ -33,6 +34,7 @@ static const ble_uuid16_t CCCD_UUID = BLE_UUID16_INIT(0x2902);
 static struct {
     uint16_t conn_handle;
     uint16_t val_handle;      // temperature characteristic value handle
+    bool     cccd_done;       // CCCD write already issued this connection
     bool     connected;
     float    temp_c;
     uint8_t  prefix;
@@ -95,7 +97,9 @@ static int on_dsc(uint16_t conn, const struct ble_gatt_error *err,
                   uint16_t chr_val_handle, const struct ble_gatt_dsc *dsc, void *arg)
 {
     if (err->status != 0 && err->status != BLE_HS_EDONE) return 0;
+    if (s.cccd_done) return 0;             // subscribe to the first CCCD only
     if (dsc && ble_uuid_cmp(&dsc->uuid.u, &CCCD_UUID.u) == 0) {
+        s.cccd_done = true;
         uint8_t val[2] = { 0x01, 0x00 };   // notifications on
         ble_gattc_write_flat(conn, dsc->handle, val, sizeof(val), on_cccd_written, NULL);
     }
@@ -152,10 +156,11 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_DISC:
         if (adv_is_probe(event->disc.data, event->disc.length_data)) {
             s.rssi = event->disc.rssi;
-            ble_gap_disc_cancel();
-            struct ble_gap_conn_params cp = {0};   // defaults
+            ble_gap_disc_cancel();   // can't connect while scanning
+            // NULL conn params -> NimBLE defaults (a zeroed struct would pass
+            // invalid 0 intervals to the controller).
             int rc = ble_gap_connect(BLE_OWN_ADDR_PUBLIC, &event->disc.addr,
-                                     10000, &cp, gap_event, NULL);
+                                     10000, NULL, gap_event, NULL);
             if (rc != 0) { ESP_LOGE(TAG, "connect rc=%d", rc); start_scan(); }
         }
         break;
@@ -164,6 +169,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         if (event->connect.status == 0) {
             s.conn_handle = event->connect.conn_handle;
             s.val_handle  = 0;
+            s.cccd_done   = false;
             ESP_LOGI(TAG, "connected — discovering temperature characteristic");
             ble_gattc_disc_chrs_by_uuid(s.conn_handle, 1, 0xffff,
                                         &TEMP_CHR_UUID.u, on_chr, NULL);
