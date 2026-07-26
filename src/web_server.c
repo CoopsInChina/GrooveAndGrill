@@ -640,8 +640,8 @@ static esp_err_t bbq_get_handler(httpd_req_t *req)
           "var t=document.getElementById('t'),s=document.getElementById('s');"
           "if(d.connected&&d.temp_ok){t.textContent=d.temp_c.toFixed(1)+' \\u00b0C';"
             "t.className='ok';s.textContent='connected \\u00b7 updated '+d.age_s+'s ago';}"
-          "else if(d.connected){t.textContent='&mdash;';s.textContent='connected, waiting for data\\u2026';}"
-          "else{t.textContent='&mdash;';t.className='bad';s.textContent='not connected \\u2014 scanning\\u2026';}"
+          "else if(d.connected){t.textContent='\\u2014';t.className='';s.textContent='connected, waiting for data\\u2026';}"
+          "else{t.textContent='\\u2014';t.className='bad';s.textContent='not connected \\u2014 scanning\\u2026';}"
         "}).catch(function(){});}"
         "setInterval(tick,1000);tick();"
         "</script></body></html>";

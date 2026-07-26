@@ -18,7 +18,10 @@ static const char *TAG = "ble_probe";
 
 // Match the thermometer by advertised name (see protocol doc).
 #define PROBE_NAME        "BBQ"
-#define FRESH_WINDOW_MS   6000    // notifies ~1.56 s; 6 s = stale
+// Notifies ~1.56 s, but WiFi/BLE share one radio so notifications drop out for
+// several seconds under WiFi load. BBQ temps move slowly, so hold the last
+// reading through those gaps rather than flapping to "waiting".
+#define FRESH_WINDOW_MS   30000
 
 // Temperature characteristic 772ae377-b3d2-ff8e-1042-5481d1e03456.
 // NimBLE stores 128-bit UUIDs little-endian, so the bytes are the display
