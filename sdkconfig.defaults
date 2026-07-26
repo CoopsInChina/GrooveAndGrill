@@ -79,3 +79,17 @@ CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC=y
 # TLS 1.3 disabled: ESP-IDF 5.3.1 experimental client sends wrong Finished MAC →
 # -0x7780 FATAL_ALERT_MESSAGE on any server that accepts the offer.
 # All art CDNs (TuneIn, Spotify) work with TLS 1.2.
+
+# ---- Bluetooth LE (direct BLE meat-probe receiver) ----
+# The "BBQ" thermometer is GATT connection-based (scan -> connect -> subscribe
+# to a NOTIFY characteristic), so this needs the CENTRAL role (plus OBSERVER to
+# find it by name). Same radio as WiFi (coexistence handled by the controller);
+# Classic-BT memory released at init. DRAM headroom is tight on this build —
+# watch free internal RAM on first boot.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
