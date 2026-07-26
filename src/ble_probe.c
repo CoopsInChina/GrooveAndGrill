@@ -145,7 +145,7 @@ static void on_notify(struct ble_gap_event *event)
         s.ever    = true;
         xSemaphoreGive(s_mutex);
     }
-    ESP_LOGD(TAG, "temp=%.1f C (prefix=0x%02x)", t, (uint8_t)buf[0]);
+    ESP_LOGI(TAG, "temp=%.1f C (prefix=0x%02x)", t, (uint8_t)buf[0]);
 }
 
 // ---- GAP event handler ---------------------------------------------------
