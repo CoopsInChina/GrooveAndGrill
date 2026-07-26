@@ -31,10 +31,11 @@ CONFIG_LV_COLOR_DEPTH_16=y
 # permanently (screens are cached forever; see ui_screen_invalidate() in
 # ui_common.c) and it exhausted (lv_obj_create() returns NULL, crash). But
 # 128KB starved DRAM so the Sonos poll/cmd tasks failed to spawn. Measured
-# worst-case usage across all 12 screens is ~50KB, so 72KB gives headroom
-# while leaving ~60KB DRAM for task stacks. Longer term the fix is to free
-# unused screens or move this pool to PSRAM.
-CONFIG_LV_MEM_SIZE_KILOBYTES=72
+# worst-case usage across all 12 screens is ~50KB. Trimmed to 64KB to give the
+# BLE controller its DRAM back (see BT section below) while keeping ~14KB of
+# pool headroom. Longer term the fix is to free unused screens or move this
+# pool to PSRAM.
+CONFIG_LV_MEM_SIZE_KILOBYTES=64
 
 # Enable Montserrat fonts used by the Music & Meat UI
 CONFIG_LV_FONT_MONTSERRAT_48=y
@@ -81,8 +82,13 @@ CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC=y
 # All art CDNs (TuneIn, Spotify) work with TLS 1.2.
 
 # ---- Bluetooth LE (BBQ Box receiver) ----
-# NimBLE host, observer role only (passive scan of the BBQ Box's
-# connectionless advertisements). No peripheral/central/broadcaster.
+# NimBLE host. We only ever passive-scan the BBQ Box's connectionless
+# advertisements, so OBSERVER is the role we use. CENTRAL is left ENABLED even
+# though we never connect: NimBLE in this IDF (5.3.1) fails to compile in a pure
+# observer-only build — ble_gap_host_check_status() calls ble_gap_adv_active_
+# instance(), which is only declared when an advertising/central role is on
+# (-Werror=implicit-function-declaration). CENTRAL costs a little host RAM but
+# builds cleanly. No peripheral/broadcaster (we never advertise).
 # Runs alongside WiFi — coexistence is handled by the IDF controller.
 # NOTE: the BLE controller + host need internal DRAM; this build is already
 # DRAM-tight (see LV_MEM_SIZE_KILOBYTES history). Classic BT memory is
@@ -90,7 +96,24 @@ CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC=y
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
-CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+
+# Controller/host memory trims — this build is DRAM-tight and the BLE
+# controller needs a contiguous internal-DRAM block at init. These keep it
+# small enough to allocate alongside LVGL + WiFi + the Sonos tasks. (Also:
+# bbq_ble_init() runs BEFORE the Sonos/art/weather tasks in main.c so the
+# controller gets first claim on unfragmented DRAM — without that ordering,
+# init fails with "BLE_INIT: Malloc failed".)
+#
+# We only ever maintain ONE BLE link at a time — either observing the BBQ Box
+# or connecting to a single direct wireless probe (selectable in settings) —
+# so MAX_ACT=2 (one scan + one connection) is all we need, and the controller's
+# adv-report + scan-dedup buffers can be small (we pass filter_duplicates=0).
+CONFIG_BT_CTRL_BLE_MAX_ACT=2
+CONFIG_BT_CTRL_BLE_ADV_REPORT_FLOW_CTRL_NUM=16
+CONFIG_BT_CTRL_SCAN_DUPL_CACHE_SIZE=16
+CONFIG_BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT=6
+CONFIG_BT_NIMBLE_WHITELIST_SIZE=4

@@ -9,6 +9,7 @@
 #include "ui_wifi_setup.h"
 #include "ui_speaker_setup.h"
 #include "ui_bbq.h"
+#include "ui_bbq_add.h"
 #include "ui_bbq_config.h"
 #include "ui_bbq_doneness.h"
 #include "ui_widgets.h"
@@ -35,6 +36,7 @@ static screen_create_fn_t s_create_fns[SCREEN_COUNT] = {
     [SCREEN_WIFI_SETUP]    = ui_wifi_setup_create,
     [SCREEN_SPEAKER_SETUP] = ui_speaker_setup_create,
     [SCREEN_BBQ]           = ui_bbq_create,
+    [SCREEN_BBQ_ADD]       = ui_bbq_add_create,
     [SCREEN_BBQ_CONFIG]    = ui_bbq_config_create,
     [SCREEN_BBQ_DONENESS]  = ui_bbq_doneness_create,
     [SCREEN_WIDGETS]       = ui_widgets_create,

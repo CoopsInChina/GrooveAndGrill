@@ -9,10 +9,8 @@ static lv_obj_t *s_scr        = NULL;
 static lv_obj_t *s_slider     = NULL;
 static lv_obj_t *s_level_lbl  = NULL;
 
-static int         s_grill_idx      = 0;
 static int         s_meat_type_idx  = 0;
 static meat_kind_t s_meat_kind      = MEAT_KIND_NONE;
-static int         s_grill_target_c = 0;
 
 static void go_back(void) { ui_navigate_to(SCREEN_BBQ_CONFIG); }
 
@@ -47,7 +45,11 @@ static void confirm_btn_cb(lv_event_t *e)
     if (idx < 0) idx = 0;
     if (idx >= mt->level_count) idx = mt->level_count - 1;
 
-    bbq_set_targets(s_grill_idx, s_grill_target_c, mt->levels[idx].target_c, s_meat_kind);
+    // Assign the pending meat sensor (see bbq_setup, set by the wizard / ⚙).
+    bbq_setup_t setup;
+    if (bbq_setup_get(&setup))
+        bbq_sensor_assign(setup.src, setup.hw_id, setup.grill_num, ROLE_MEAT,
+                          s_meat_kind, mt->levels[idx].target_c);
     ui_navigate_to(SCREEN_BBQ);
 }
 
@@ -102,13 +104,10 @@ lv_obj_t *ui_bbq_doneness_create(void)
     return s_scr;
 }
 
-void ui_bbq_doneness_set_target(int grill_idx, int meat_type_idx, meat_kind_t kind,
-                                 int grill_target_c)
+void ui_bbq_doneness_begin(int meat_type_idx, meat_kind_t kind)
 {
-    s_grill_idx      = grill_idx;
     s_meat_type_idx  = meat_type_idx;
     s_meat_kind      = kind;
-    s_grill_target_c = grill_target_c;
 
     if (meat_type_idx < 0 || meat_type_idx >= MEAT_TYPE_COUNT || !s_slider) return;
     const meat_type_t *mt = &MEAT_TYPES[meat_type_idx];

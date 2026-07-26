@@ -1,19 +1,39 @@
 #pragma once
 
 #include "app_config.h"
+#include "bbq_ble.h"     // BBQ_BLE_CHANNELS, BBQ_BLE_MAX_PROBES
 #include <stdbool.h>
+#include <stdint.h>
 
-#define MAX_GRILLS  MAX_BBQ_PROBES
+// ============================================================================
+// Sensor-centric BBQ model
+// ----------------------------------------------------------------------------
+// The primitive is a *sensor* (a wired thermocouple on the box, or a wireless
+// probe reached via the box hub). Each sensor is allocated to a grill number
+// and a role — grill-ambient or meat — and, for meat, a meat kind + target.
+// A "grill" is a derived view: the set of sensors sharing a grill number.
+// Allocations persist to NVS, so a cook survives a reboot.
+// ============================================================================
+
+#define BBQ_TC_COUNT      BBQ_BLE_CHANNELS       // 4 wired thermocouples
+#define BBQ_PROBE_COUNT   BBQ_BLE_MAX_PROBES     // wireless probe slots
+#define MAX_BBQ_SENSORS   (BBQ_TC_COUNT + BBQ_PROBE_COUNT)
+#define MAX_GRILLS        MAX_BBQ_PROBES         // logical grill numbers 1..MAX_GRILLS
 
 typedef enum {
-    PROBE_NONE = 0,        // never added to this grill slot
-    PROBE_CONNECTED,
-    PROBE_DISCONNECTED,    // was connected, lost signal
-} probe_state_t;
+    SRC_TC = 0,      // wired thermocouple (hw_id = box channel 0..3)
+    SRC_PROBE,       // wireless probe     (hw_id = probe id byte)
+} sensor_src_t;
 
-// Identifies which meat-icon to show — kept separate from the MEAT_TYPES
-// table in meat_temps.h (which only covers meats with doneness levels;
-// chicken has a single food-safety target and isn't in that table).
+typedef enum {
+    ROLE_UNASSIGNED = 0,
+    ROLE_GRILL,      // ambient / pit temperature
+    ROLE_MEAT,       // internal meat temperature
+} sensor_role_t;
+
+// Identifies which meat-icon to show and (via bbq_meat_type_idx) which
+// doneness table in meat_temps.h to use. Chicken has a single food-safety
+// target and isn't in that table.
 typedef enum {
     MEAT_KIND_NONE = 0,
     MEAT_KIND_CHICKEN,
@@ -23,38 +43,112 @@ typedef enum {
 } meat_kind_t;
 
 typedef struct {
-    bool          configured;      // target temps set via Grill Config screen
+    sensor_src_t  src;
+    uint8_t       hw_id;        // TC channel 0..3, or probe id byte
+    bool          present;      // reporting within the freshness window
+    float         temp_c;       // latest reading (valid when present)
+    // ---- allocation (persisted) ----
+    uint8_t       grill_num;    // 1..MAX_GRILLS, 0 = unassigned
+    sensor_role_t role;
+    meat_kind_t   meat_kind;    // when role == ROLE_MEAT
+    int           target_c;     // grill ambient target, or meat doneness target
+} bbq_sensor_t;
+
+void bbq_controller_init(void);
+
+// ---- Sensor pool -----------------------------------------------------------
+// Count of sensors currently known: every wired channel that is present, plus
+// every sensor (wired or wireless) that has a saved allocation.
+int  bbq_sensor_count(void);
+bool bbq_sensor_at(int i, bbq_sensor_t *out);
+bool bbq_sensor_get(sensor_src_t src, uint8_t hw_id, bbq_sensor_t *out);
+
+// Assign / update a sensor's allocation (from the web page or an on-screen
+// config flow). Persists to NVS. Passing ROLE_UNASSIGNED clears it.
+void bbq_sensor_assign(sensor_src_t src, uint8_t hw_id, uint8_t grill_num,
+                       sensor_role_t role, meat_kind_t kind, int target_c);
+void bbq_sensor_unassign(sensor_src_t src, uint8_t hw_id);
+
+// ---- Derived cook views ----------------------------------------------------
+// The gauge screens page through these: one view per allocated MEAT sensor
+// (carrying its grill's shared ambient), plus one ambient-only view per grill
+// that has a grill sensor but no meat. Grill numbers with nothing allocated
+// produce no view.
+typedef struct {
+    uint8_t       grill_num;
+    // grill ambient (shared by every meat on this grill):
+    bool          grill_assigned;
+    bool          grill_present;
+    float         grill_temp_c;
+    int           grill_target_c;
+    sensor_src_t  grill_src;      // ambient sensor identity (when grill_assigned)
+    uint8_t       grill_hw_id;
+    // the meat for this view (has_meat == false → ambient-only view):
+    bool          has_meat;
+    sensor_src_t  meat_src;
+    uint8_t       meat_hw_id;
+    meat_kind_t   meat_kind;
+    bool          meat_present;
+    float         meat_temp_c;
+    int           meat_target_c;
+} bbq_view_t;
+
+int  bbq_view_count(void);
+bool bbq_view_at(int i, bbq_view_t *out);
+
+// meat_kind → index into MEAT_TYPES (meat_temps.h), or -1 for none/chicken.
+int  bbq_meat_type_idx(meat_kind_t k);
+
+// True if grill_num already has a ROLE_GRILL (ambient) sensor assigned; if so
+// and src/hw_id are non-NULL, fills that sensor's identity.
+bool bbq_grill_has_ambient(uint8_t grill_num, sensor_src_t *src, uint8_t *hw_id);
+
+// ---- On-screen add/edit wizard context -------------------------------
+// Carries which sensor an on-screen config flow (Add Meat wizard, or the ⚙
+// button on a cook view) is about to assign, so the config/doneness screens
+// write the right sensor via bbq_sensor_assign() instead of a fixed mapping.
+typedef struct {
+    uint8_t       grill_num;
+    sensor_src_t  src;
+    uint8_t       hw_id;
+    sensor_role_t role;       // ROLE_GRILL or ROLE_MEAT
+} bbq_setup_t;
+
+void bbq_setup_set(const bbq_setup_t *s);
+bool bbq_setup_get(bbq_setup_t *out);
+
+// ============================================================================
+// Legacy grill API (compatibility shim)
+// ----------------------------------------------------------------------------
+// The current gauge / config / doneness screens are still grill-centric. These
+// map the old per-grill view onto the sensor model so those screens keep
+// working until the one-screen-per-meat UI reframe lands. New code should use
+// the sensor / view API above.
+// ============================================================================
+
+typedef enum {
+    PROBE_NONE = 0,
+    PROBE_CONNECTED,
+    PROBE_DISCONNECTED,
+} probe_state_t;
+
+typedef struct {
+    bool          configured;
     meat_kind_t   meat_kind;
     probe_state_t probe_state;
-    float         grill_temp_c;    // current ambient/grill reading
-    float         meat_temp_c;     // current meat reading
+    float         grill_temp_c;
+    float         meat_temp_c;
     int           grill_target_c;
     int           meat_target_c;
 } bbq_grill_t;
 
-void bbq_controller_init(void);
-
 int  bbq_grill_count(void);
-// Adds a grill slot with defaults (no probe, not configured). Returns false if
-// already at MAX_GRILLS.
 bool bbq_add_grill(void);
-
 const bbq_grill_t *bbq_get_grill(int idx);
-
-// Sets the grill's target temps + meat kind from the Grill Config / Meat
-// Doneness screens. Real, permanent app state — not a hardware mock.
 void bbq_set_targets(int idx, int grill_target_c, int meat_target_c, meat_kind_t kind);
-
-// Applies just the grill target immediately as the Grill Config slider moves,
-// without waiting for a meat to be chosen. Leaves the configured flag alone.
 void bbq_set_grill_target(int idx, int grill_target_c);
 
-// ---- Temporary mock hooks --------------------------------------------
-// No BLE probe hardware/pairing flow exists yet (see project notes on the
-// BLE thermometer + wired-thermocouple satellite work). These simulate the
-// probe lifecycle with the demo values from the UI wireframes so the four
-// gauge states (no probe / connected-unconfigured / configured-no-reading /
-// configured-connected) can be verified on real hardware. Replace with real
-// BLE reads once that backend exists.
-void bbq_mock_connect_probe(int idx);   // "+" tapped — pairs with demo readings
-void bbq_mock_toggle_probe(int idx);    // "Probe Status" tapped — connect/disconnect
+// Legacy demo hooks — retained so the existing UI's "+"/probe-status controls
+// still link. With real BLE data these are no-ops on live sensors.
+void bbq_mock_connect_probe(int idx);
+void bbq_mock_toggle_probe(int idx);

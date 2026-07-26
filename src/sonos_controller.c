@@ -247,7 +247,10 @@ static int send_soap(const char *service, const char *action,
         return -1;
     }
 
-    static char resp_tmp[SOAP_RESP_BUF_SZ];
+    // PSRAM, not internal .bss: this 4KB buffer is used only while holding
+    // g_network_mutex (taken just above), so a single shared PSRAM buffer is
+    // safe and keeps 4KB of scarce internal DRAM free for task stacks.
+    static EXT_RAM_BSS_ATTR char resp_tmp[SOAP_RESP_BUF_SZ];
     http_ctx_t ctx = { resp_tmp, 0, (int)sizeof(resp_tmp) };
     resp_tmp[0] = '\0';
 
@@ -484,12 +487,19 @@ bool sonos_controller_discover(uint32_t timeout_ms)
 
 static void update_track_info(void)
 {
-    static char resp[SOAP_RESP_BUF_SZ];
+    // PSRAM (see send_soap): 4KB kept out of scarce internal DRAM. Only
+    // poll_task calls this, and send_soap serializes all network access.
+    static EXT_RAM_BSS_ATTR char resp[SOAP_RESP_BUF_SZ];
     if (send_soap("AVTransport", "GetPositionInfo",
                   "<InstanceID>0</InstanceID>", resp, sizeof(resp)) != 200) return;
 
     char uri[256]       = {0};
-    char meta_raw[2048] = {0};
+    // In PSRAM (not stack, not internal .bss): this 2KB buffer would blow
+    // poll_task's tight stack budget, but a plain static would eat 2KB of the
+    // scarce internal DRAM. EXT_RAM_BSS_ATTR puts it in PSRAM for free. Safe
+    // because update_track_info() runs only from the single poll_task.
+    static EXT_RAM_BSS_ATTR char meta_raw[2048];
+    meta_raw[0] = '\0';
     char rel_time[16]   = {0};
     char duration[16]   = {0};
     extract_xml(resp, "TrackURI",       uri,       sizeof(uri));
@@ -548,7 +558,7 @@ static void update_track_info(void)
 
 static void update_playback_state(void)
 {
-    static char resp[SOAP_RESP_BUF_SZ];
+    static EXT_RAM_BSS_ATTR char resp[SOAP_RESP_BUF_SZ];   // PSRAM — poll_task only, serialized in send_soap
     if (send_soap("AVTransport", "GetTransportInfo",
                   "<InstanceID>0</InstanceID>", resp, sizeof(resp)) != 200) return;
 
@@ -565,7 +575,7 @@ static void update_playback_state(void)
 
 static void update_volume(void)
 {
-    static char resp[SOAP_RESP_BUF_SZ];
+    static EXT_RAM_BSS_ATTR char resp[SOAP_RESP_BUF_SZ];   // PSRAM — poll_task only, serialized in send_soap
     if (send_soap("RenderingControl", "GetVolume",
                   "<InstanceID>0</InstanceID><Channel>Master</Channel>",
                   resp, sizeof(resp)) != 200) return;
@@ -1291,7 +1301,10 @@ void sonos_controller_start_polling(void)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
     if (!s_poll_task) {
-        BaseType_t r = xTaskCreate(poll_task, "sonos_poll", 8192, NULL, 5, &s_poll_task);
+        // 6144 (was 8192): the 2KB meta_raw buffer in update_track_info is now
+        // static, so poll_task's peak stack dropped ~2KB. This lets it fit in
+        // the tight internal DRAM left after the BLE controller + LVGL pool.
+        BaseType_t r = xTaskCreate(poll_task, "sonos_poll", 6144, NULL, 5, &s_poll_task);
         if (r != pdPASS) {
             ESP_LOGE(TAG, "poll_task create FAILED — out of internal DRAM");
             s_poll_task = NULL;

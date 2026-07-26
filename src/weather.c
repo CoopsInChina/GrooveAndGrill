@@ -19,7 +19,13 @@ static const char *TAG = "weather";
 #define REFRESH_MS      (30 * 60 * 1000)
 #define LOC_REFRESH_MS  (24 * 60 * 60 * 1000)
 #define LOC_RETRY_MS    (60 * 1000)             // retry location every 60 s while not yet valid
-#define TZ_TIMEOUT_MS   10000                   // 10 s — gives slow networks time to respond
+#define TZ_TIMEOUT_MS   6000                    // bounds how long we hold g_network_mutex on the location fetch
+#define WTTR_TIMEOUT_MS 8000                    // ditto for the (larger) weather fetch — was 15s, which starved Sonos
+// After NTP, let Sonos discovery + the first now-playing poll and album-art
+// download win the shared g_network_mutex before we start our slow, large
+// weather fetches. Weather only feeds the screensaver, so a short deferral
+// keeps album art snappy at boot without any user-visible cost.
+#define STARTUP_GRACE_MS 10000
 
 static weather_data_t    s_data;
 static SemaphoreHandle_t s_mutex;
@@ -110,7 +116,7 @@ static void fetch_wttr(char *buf, int buflen, float lat, float lon)
     snprintf(url, sizeof(url),
              "http://wttr.in/~%.2f,%.2f?format=j1&days=2&lang=en", lat, lon);
 
-    int len = fetch_url(url, buf, buflen, 15000, false);
+    int len = fetch_url(url, buf, buflen, WTTR_TIMEOUT_MS, false);
     if (len <= 0) { ESP_LOGW(TAG, "wttr.in failed"); return; }
 
     cJSON *root = cJSON_ParseWithLength(buf, len);
@@ -228,6 +234,10 @@ static void weather_task(void *arg)
         wait++;
     }
 
+    // Hold back so Sonos polling + the first album-art download get the network
+    // first (see STARTUP_GRACE_MS). Weather is only needed on the screensaver.
+    vTaskDelay(pdMS_TO_TICKS(STARTUP_GRACE_MS));
+
     float lat = 0.0f, lon = 0.0f;
     bool  loc_valid = false;
     uint32_t loc_last_ms = 0;
@@ -269,6 +279,10 @@ static void weather_task(void *arg)
 
         // Fetch weather if we have coordinates
         if (loc_valid) {
+            // Yield first so a poll_task SOAP call that's waiting on the mutex
+            // (e.g. right after we released it from the location fetch above)
+            // gets serviced before we grab it again for the larger weather GET.
+            vTaskDelay(pdMS_TO_TICKS(500));
             if (xSemaphoreTake(g_network_mutex, pdMS_TO_TICKS(5000)) == pdTRUE) {
                 fetch_wttr(buf, BUF_SIZE, lat, lon);
                 xSemaphoreGive(g_network_mutex);

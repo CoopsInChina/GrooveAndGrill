@@ -1,107 +1,461 @@
 #include "bbq_controller.h"
 #include "bbq_ble.h"
+#include "app_config.h"
 #include "esp_timer.h"
+#include "esp_log.h"
+#include "nvs_flash.h"
+#include "nvs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include <string.h>
+#include <math.h>
 
-static bbq_grill_t s_grills[MAX_GRILLS];
-static int         s_count = 0;
+static const char *TAG = "bbq";
 
-static esp_timer_handle_t s_ble_timer;
+// ---- Persisted allocation record (source of truth for assignment) ----------
+typedef struct {
+    bool          used;
+    sensor_src_t  src;
+    uint8_t       hw_id;
+    uint8_t       grill_num;
+    sensor_role_t role;
+    meat_kind_t   meat_kind;
+    int16_t       target_c;
+} alloc_t;
 
-// Map the BBQ Box's 4 thermocouples onto grills: each grill takes a pair —
-// grill 0 = TC0 (grill) + TC1 (meat), grill 1 = TC2 + TC3. Only runs while the
-// box is being heard; when it's absent the mock/UI state is left untouched so
-// on-bench UI testing still works. (v1 fixed mapping — make configurable later.)
-static void poll_ble(void)
+static alloc_t          s_alloc[MAX_BBQ_SENSORS];
+
+// Live pool, rebuilt every poll from bbq_ble + s_alloc.
+static bbq_sensor_t     s_sensors[MAX_BBQ_SENSORS];
+static int              s_sensor_count;
+
+static SemaphoreHandle_t s_lock;
+static esp_timer_handle_t s_poll_timer;
+
+// Legacy shim: the old UI always shows >=1 grill and can "add" up to MAX_GRILLS.
+static int              s_legacy_grills = 1;
+
+// ---- NVS persistence -------------------------------------------------------
+// Blob layout: [ver=1][count] then count × {src,hw_id,grill,role,kind,tgt_lo,tgt_hi}
+#define ALLOC_REC_BYTES   7
+#define ALLOC_BLOB_VER    1
+
+static void alloc_save(void)
 {
-    if (!bbq_ble_present()) return;
+    uint8_t blob[2 + MAX_BBQ_SENSORS * ALLOC_REC_BYTES];
+    int n = 0, count = 0;
+    blob[0] = ALLOC_BLOB_VER;
+    n = 2;
+    for (int i = 0; i < MAX_BBQ_SENSORS; i++) {
+        if (!s_alloc[i].used || s_alloc[i].role == ROLE_UNASSIGNED) continue;
+        blob[n++] = (uint8_t)s_alloc[i].src;
+        blob[n++] = s_alloc[i].hw_id;
+        blob[n++] = s_alloc[i].grill_num;
+        blob[n++] = (uint8_t)s_alloc[i].role;
+        blob[n++] = (uint8_t)s_alloc[i].meat_kind;
+        blob[n++] = (uint8_t)(s_alloc[i].target_c & 0xFF);
+        blob[n++] = (uint8_t)((s_alloc[i].target_c >> 8) & 0xFF);
+        count++;
+    }
+    blob[1] = (uint8_t)count;
 
-    for (int idx = 0; idx < s_count; idx++) {
-        int tc_grill = idx * 2;
-        int tc_meat  = idx * 2 + 1;
-        if (tc_grill >= BBQ_BLE_CHANNELS) continue;   // no box channels for this grill
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) return;
+    nvs_set_blob(nvs, NVS_KEY_BBQ_ALLOC, blob, n);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+}
 
-        float gt, mt;
-        bool g_ok = bbq_ble_channel(tc_grill, &gt);
-        bool m_ok = bbq_ble_channel(tc_meat,  &mt);
+static void alloc_load(void)
+{
+    memset(s_alloc, 0, sizeof(s_alloc));
 
-        bbq_grill_t *g = &s_grills[idx];
-        if (g_ok) g->grill_temp_c = gt;
-        if (m_ok) g->meat_temp_c  = mt;
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) return;
 
-        if (g_ok || m_ok)
-            g->probe_state = PROBE_CONNECTED;
-        else if (g->probe_state == PROBE_CONNECTED)
-            g->probe_state = PROBE_DISCONNECTED;      // was live, lost the channel
+    uint8_t blob[2 + MAX_BBQ_SENSORS * ALLOC_REC_BYTES];
+    size_t len = sizeof(blob);
+    esp_err_t err = nvs_get_blob(nvs, NVS_KEY_BBQ_ALLOC, blob, &len);
+    nvs_close(nvs);
+    if (err != ESP_OK || len < 2 || blob[0] != ALLOC_BLOB_VER) return;
+
+    int count = blob[1];
+    int n = 2, slot = 0;
+    for (int i = 0; i < count && slot < MAX_BBQ_SENSORS; i++) {
+        if (n + ALLOC_REC_BYTES > (int)len) break;
+        alloc_t *a = &s_alloc[slot++];
+        a->used      = true;
+        a->src       = (sensor_src_t)blob[n++];
+        a->hw_id     = blob[n++];
+        a->grill_num = blob[n++];
+        a->role      = (sensor_role_t)blob[n++];
+        a->meat_kind = (meat_kind_t)blob[n++];
+        a->target_c  = (int16_t)(blob[n] | (blob[n + 1] << 8));
+        n += 2;
+    }
+    ESP_LOGI(TAG, "loaded %d sensor allocation(s)", slot);
+}
+
+static alloc_t *alloc_find(sensor_src_t src, uint8_t hw_id)
+{
+    for (int i = 0; i < MAX_BBQ_SENSORS; i++)
+        if (s_alloc[i].used && s_alloc[i].src == src && s_alloc[i].hw_id == hw_id)
+            return &s_alloc[i];
+    return NULL;
+}
+
+static alloc_t *alloc_get_or_add(sensor_src_t src, uint8_t hw_id)
+{
+    alloc_t *a = alloc_find(src, hw_id);
+    if (a) return a;
+    for (int i = 0; i < MAX_BBQ_SENSORS; i++) {
+        if (!s_alloc[i].used) {
+            s_alloc[i].used  = true;
+            s_alloc[i].src   = src;
+            s_alloc[i].hw_id = hw_id;
+            return &s_alloc[i];
+        }
+    }
+    return NULL;
+}
+
+// ---- Live pool rebuild (1 Hz) ----------------------------------------------
+static void add_sensor(sensor_src_t src, uint8_t hw_id, bool present, float temp)
+{
+    // Merge with any existing entry for this identity.
+    for (int i = 0; i < s_sensor_count; i++) {
+        if (s_sensors[i].src == src && s_sensors[i].hw_id == hw_id) {
+            if (present) { s_sensors[i].present = true; s_sensors[i].temp_c = temp; }
+            return;
+        }
+    }
+    if (s_sensor_count >= MAX_BBQ_SENSORS) return;
+
+    bbq_sensor_t *s = &s_sensors[s_sensor_count++];
+    memset(s, 0, sizeof(*s));
+    s->src     = src;
+    s->hw_id   = hw_id;
+    s->present = present;
+    s->temp_c  = temp;
+
+    alloc_t *a = alloc_find(src, hw_id);
+    if (a) {
+        s->grill_num = a->grill_num;
+        s->role      = a->role;
+        s->meat_kind = a->meat_kind;
+        s->target_c  = a->target_c;
     }
 }
 
-static void ble_timer_cb(void *arg) { (void)arg; poll_ble(); }
+static void poll_cb(void *arg)
+{
+    (void)arg;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) return;
+
+    s_sensor_count = 0;
+
+    // 1) Wired thermocouples: always surface all 4 fixed channels (present per
+    //    the box advert, else shown "not connected") so they can be allocated
+    //    up front, before the box is even powered.
+    for (int ch = 0; ch < BBQ_TC_COUNT; ch++) {
+        float t = 0;
+        bool ok = bbq_ble_channel(ch, &t);
+        add_sensor(SRC_TC, (uint8_t)ch, ok, t);
+    }
+
+    // 2) Wireless probes currently reported by the box hub.
+    int pc = bbq_ble_probe_count();
+    for (int i = 0; i < pc; i++) {
+        uint8_t id = 0; float t = 0;
+        if (!bbq_ble_probe(i, &id, &t)) continue;
+        add_sensor(SRC_PROBE, id, !isnan(t), isnan(t) ? 0.0f : t);
+    }
+
+    // 3) Allocated-but-absent sensors (e.g. a configured probe that dropped)
+    //    so they stay visible/configurable.
+    for (int i = 0; i < MAX_BBQ_SENSORS; i++) {
+        if (s_alloc[i].used && s_alloc[i].role != ROLE_UNASSIGNED)
+            add_sensor(s_alloc[i].src, s_alloc[i].hw_id, false, 0.0f);
+    }
+
+    xSemaphoreGive(s_lock);
+}
 
 void bbq_controller_init(void)
 {
-    memset(s_grills, 0, sizeof(s_grills));
-    s_count = 1;   // must always have at least 1 grill
+    s_lock = xSemaphoreCreateMutex();
+    alloc_load();
+    poll_cb(NULL);   // seed the pool immediately
 
-    const esp_timer_create_args_t targs = {
-        .callback = ble_timer_cb,
-        .name     = "bbq_ble_poll",
-    };
-    if (esp_timer_create(&targs, &s_ble_timer) == ESP_OK)
-        esp_timer_start_periodic(s_ble_timer, 1000000);   // 1 Hz
+    const esp_timer_create_args_t targs = { .callback = poll_cb, .name = "bbq_poll" };
+    if (esp_timer_create(&targs, &s_poll_timer) == ESP_OK)
+        esp_timer_start_periodic(s_poll_timer, 1000000);   // 1 Hz
 }
 
-int bbq_grill_count(void)
+// ---- Sensor pool API -------------------------------------------------------
+int bbq_sensor_count(void)
 {
-    return s_count;
+    int n = 0;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+        n = s_sensor_count;
+        xSemaphoreGive(s_lock);
+    }
+    return n;
 }
+
+bool bbq_sensor_at(int i, bbq_sensor_t *out)
+{
+    bool ok = false;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+        if (i >= 0 && i < s_sensor_count) { if (out) *out = s_sensors[i]; ok = true; }
+        xSemaphoreGive(s_lock);
+    }
+    return ok;
+}
+
+bool bbq_sensor_get(sensor_src_t src, uint8_t hw_id, bbq_sensor_t *out)
+{
+    bool ok = false;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+        for (int i = 0; i < s_sensor_count; i++) {
+            if (s_sensors[i].src == src && s_sensors[i].hw_id == hw_id) {
+                if (out) *out = s_sensors[i];
+                ok = true;
+                break;
+            }
+        }
+        xSemaphoreGive(s_lock);
+    }
+    return ok;
+}
+
+void bbq_sensor_assign(sensor_src_t src, uint8_t hw_id, uint8_t grill_num,
+                       sensor_role_t role, meat_kind_t kind, int target_c)
+{
+    if (xSemaphoreTake(s_lock, portMAX_DELAY) == pdTRUE) {
+        alloc_t *a = alloc_get_or_add(src, hw_id);
+        if (a) {
+            a->grill_num = grill_num;
+            a->role      = role;
+            a->meat_kind = (role == ROLE_MEAT) ? kind : MEAT_KIND_NONE;
+            a->target_c  = (int16_t)target_c;
+            if (role == ROLE_UNASSIGNED) a->used = false;   // freed slot
+        }
+        alloc_save();
+        xSemaphoreGive(s_lock);
+    }
+    poll_cb(NULL);   // reflect immediately in the live pool
+}
+
+void bbq_sensor_unassign(sensor_src_t src, uint8_t hw_id)
+{
+    bbq_sensor_assign(src, hw_id, 0, ROLE_UNASSIGNED, MEAT_KIND_NONE, 0);
+}
+
+// ---- Derived cook views ----------------------------------------------------
+int bbq_view_count(void)
+{
+    int n = 0;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) return 0;
+    // one view per assigned meat sensor …
+    for (int i = 0; i < s_sensor_count; i++)
+        if (s_sensors[i].role == ROLE_MEAT && s_sensors[i].grill_num) n++;
+    // … plus one ambient-only view per grill that has a grill sensor but no meat.
+    for (int g = 1; g <= MAX_GRILLS; g++) {
+        bool has_grill = false, has_meat = false;
+        for (int i = 0; i < s_sensor_count; i++) {
+            if (s_sensors[i].grill_num != g) continue;
+            if (s_sensors[i].role == ROLE_GRILL) has_grill = true;
+            if (s_sensors[i].role == ROLE_MEAT)  has_meat  = true;
+        }
+        if (has_grill && !has_meat) n++;
+    }
+    xSemaphoreGive(s_lock);
+    return n;
+}
+
+// Fill the grill-ambient fields of a view from grill number g (lock held).
+static void fill_grill_ambient(bbq_view_t *v, uint8_t g)
+{
+    v->grill_num = g;
+    for (int i = 0; i < s_sensor_count; i++) {
+        if (s_sensors[i].grill_num == g && s_sensors[i].role == ROLE_GRILL) {
+            v->grill_assigned = true;
+            v->grill_present  = s_sensors[i].present;
+            v->grill_temp_c   = s_sensors[i].temp_c;
+            v->grill_target_c = s_sensors[i].target_c;
+            v->grill_src      = s_sensors[i].src;
+            v->grill_hw_id    = s_sensors[i].hw_id;
+            return;
+        }
+    }
+}
+
+bool bbq_grill_has_ambient(uint8_t grill_num, sensor_src_t *src, uint8_t *hw_id)
+{
+    bool found = false;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+        for (int i = 0; i < s_sensor_count; i++) {
+            if (s_sensors[i].grill_num == grill_num && s_sensors[i].role == ROLE_GRILL) {
+                if (src)   *src   = s_sensors[i].src;
+                if (hw_id) *hw_id = s_sensors[i].hw_id;
+                found = true;
+                break;
+            }
+        }
+        xSemaphoreGive(s_lock);
+    }
+    return found;
+}
+
+// ---- On-screen wizard context ---------------------------------------------
+static bbq_setup_t s_setup;
+static bool        s_setup_valid;
+
+void bbq_setup_set(const bbq_setup_t *s)
+{
+    if (!s) { s_setup_valid = false; return; }
+    s_setup = *s;
+    s_setup_valid = true;
+}
+
+bool bbq_setup_get(bbq_setup_t *out)
+{
+    if (!s_setup_valid || !out) return false;
+    *out = s_setup;
+    return true;
+}
+
+bool bbq_view_at(int idx, bbq_view_t *out)
+{
+    if (!out || idx < 0) return false;
+    bool ok = false;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) return false;
+
+    int seen = 0;
+
+    // Pass 1: one view per assigned meat sensor.
+    for (int i = 0; i < s_sensor_count && !ok; i++) {
+        if (s_sensors[i].role != ROLE_MEAT || !s_sensors[i].grill_num) continue;
+        if (seen++ != idx) continue;
+        memset(out, 0, sizeof(*out));
+        fill_grill_ambient(out, s_sensors[i].grill_num);
+        out->has_meat      = true;
+        out->meat_src      = s_sensors[i].src;
+        out->meat_hw_id    = s_sensors[i].hw_id;
+        out->meat_kind     = s_sensors[i].meat_kind;
+        out->meat_present  = s_sensors[i].present;
+        out->meat_temp_c   = s_sensors[i].temp_c;
+        out->meat_target_c = s_sensors[i].target_c;
+        ok = true;
+    }
+
+    // Pass 2: ambient-only views for grills with a grill sensor but no meat.
+    for (int g = 1; g <= MAX_GRILLS && !ok; g++) {
+        bool has_grill = false, has_meat = false;
+        for (int i = 0; i < s_sensor_count; i++) {
+            if (s_sensors[i].grill_num != g) continue;
+            if (s_sensors[i].role == ROLE_GRILL) has_grill = true;
+            if (s_sensors[i].role == ROLE_MEAT)  has_meat  = true;
+        }
+        if (!has_grill || has_meat) continue;
+        if (seen++ != idx) continue;
+        memset(out, 0, sizeof(*out));
+        fill_grill_ambient(out, (uint8_t)g);
+        out->has_meat = false;
+        ok = true;
+    }
+
+    xSemaphoreGive(s_lock);
+    return ok;
+}
+
+int bbq_meat_type_idx(meat_kind_t k)
+{
+    switch (k) {
+        case MEAT_KIND_BEEF: return 0;
+        case MEAT_KIND_LAMB: return 1;
+        case MEAT_KIND_PORK: return 2;
+        default:             return -1;   // none / chicken (single target)
+    }
+}
+
+// ============================================================================
+// Legacy grill API (shim over the sensor model)
+// ----------------------------------------------------------------------------
+// Legacy grill idx (0-based) maps to grill number idx+1. When that grill has
+// no explicit allocation yet, we fall back to the historical fixed pairing —
+// grill n = TC[2n] (ambient) + TC[2n+1] (meat) — so bench testing (plug a TC
+// in, see grill 1) still works. Config-screen writes create real allocations.
+// ============================================================================
+
+int bbq_grill_count(void) { return s_legacy_grills; }
 
 bool bbq_add_grill(void)
 {
-    if (s_count >= MAX_GRILLS) return false;
-    s_grills[s_count] = (bbq_grill_t){0};
-    s_count++;
+    if (s_legacy_grills >= MAX_GRILLS) return false;
+    s_legacy_grills++;
     return true;
 }
 
 const bbq_grill_t *bbq_get_grill(int idx)
 {
-    if (idx < 0 || idx >= s_count) return NULL;
-    return &s_grills[idx];
-}
+    static bbq_grill_t g;   // returned by pointer; single-threaded UI use
+    if (idx < 0 || idx >= s_legacy_grills) return NULL;
 
-void bbq_mock_connect_probe(int idx)
-{
-    if (idx < 0 || idx >= s_count) return;
-    s_grills[idx].probe_state = PROBE_CONNECTED;
-    s_grills[idx].meat_temp_c  = 25.0f;
-    s_grills[idx].grill_temp_c = 350.0f;
-}
+    memset(&g, 0, sizeof(g));
+    uint8_t grill_num = (uint8_t)(idx + 1);
+    bool have_grill = false, have_meat = false;
 
-void bbq_mock_toggle_probe(int idx)
-{
-    if (idx < 0 || idx >= s_count) return;
-    bbq_grill_t *g = &s_grills[idx];
-    if (g->probe_state == PROBE_CONNECTED) {
-        g->probe_state = PROBE_DISCONNECTED;
-    } else if (g->probe_state == PROBE_DISCONNECTED) {
-        g->probe_state = PROBE_CONNECTED;
-        g->meat_temp_c  = 25.0f;
-        g->grill_temp_c = 350.0f;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+        for (int i = 0; i < s_sensor_count; i++) {
+            bbq_sensor_t *s = &s_sensors[i];
+            if (s->grill_num != grill_num) continue;
+            if (s->role == ROLE_GRILL) {
+                if (s->present) g.grill_temp_c = s->temp_c;
+                g.grill_target_c = s->target_c;
+                have_grill = true;
+                if (s->present) g.probe_state = PROBE_CONNECTED;
+            } else if (s->role == ROLE_MEAT && !have_meat) {
+                if (s->present) g.meat_temp_c = s->temp_c;
+                g.meat_target_c = s->target_c;
+                g.meat_kind     = s->meat_kind;
+                have_meat = true;
+                if (s->present) g.probe_state = PROBE_CONNECTED;
+            }
+        }
+        // Fallback to the historical TC pairing for a still-unallocated grill.
+        if (!have_grill && !have_meat) {
+            for (int i = 0; i < s_sensor_count; i++) {
+                bbq_sensor_t *s = &s_sensors[i];
+                if (s->src != SRC_TC) continue;
+                if (s->hw_id == idx * 2     && s->present) { g.grill_temp_c = s->temp_c; g.probe_state = PROBE_CONNECTED; }
+                if (s->hw_id == idx * 2 + 1 && s->present) { g.meat_temp_c  = s->temp_c; g.probe_state = PROBE_CONNECTED; }
+            }
+        }
+        xSemaphoreGive(s_lock);
     }
+
+    g.configured = have_grill || have_meat;
+    return &g;
 }
 
 void bbq_set_targets(int idx, int grill_target_c, int meat_target_c, meat_kind_t kind)
 {
-    if (idx < 0 || idx >= s_count) return;
-    s_grills[idx].configured      = true;
-    s_grills[idx].meat_kind        = kind;
-    s_grills[idx].grill_target_c  = grill_target_c;
-    s_grills[idx].meat_target_c   = meat_target_c;
+    if (idx < 0 || idx >= MAX_GRILLS) return;
+    uint8_t grill_num = (uint8_t)(idx + 1);
+    // Materialise the legacy grill onto its default TC pair.
+    bbq_sensor_assign(SRC_TC, (uint8_t)(idx * 2),     grill_num, ROLE_GRILL, MEAT_KIND_NONE, grill_target_c);
+    bbq_sensor_assign(SRC_TC, (uint8_t)(idx * 2 + 1), grill_num, ROLE_MEAT,  kind,           meat_target_c);
 }
 
 void bbq_set_grill_target(int idx, int grill_target_c)
 {
-    if (idx < 0 || idx >= s_count) return;
-    s_grills[idx].grill_target_c = grill_target_c;
+    if (idx < 0 || idx >= MAX_GRILLS) return;
+    bbq_sensor_assign(SRC_TC, (uint8_t)(idx * 2), (uint8_t)(idx + 1),
+                      ROLE_GRILL, MEAT_KIND_NONE, grill_target_c);
 }
+
+// Real presence now comes from BLE; the old demo hooks are inert.
+void bbq_mock_connect_probe(int idx) { (void)idx; }
+void bbq_mock_toggle_probe(int idx)  { (void)idx; }

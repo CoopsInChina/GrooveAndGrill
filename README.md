@@ -4,8 +4,9 @@ A combined **Sonos music controller** and **BBQ temperature monitor** for the
 kitchen/patio, running on an ESP32-S3 with a 480×480 round touch display.
 
 Control your Sonos system — browse and play favourites, skip tracks, adjust
-volume — and (in progress) keep an eye on up to four grills with live meat and
-grill-temperature gauges, all from one round, always-on device.
+volume — and keep an eye on multiple grills and cuts of meat with live gauges,
+reading temperatures over Bluetooth from wired thermocouples and wireless probes
+via a companion **BBQ Box** gateway.
 
 > Firmware version: **0.1.0** · Status: **active development**
 
@@ -33,14 +34,16 @@ grill-temperature gauges, all from one round, always-on device.
 - **IO expander:** TCA9554 (shares the I²C bus; drives display/touch reset lines)
 - **Power:** mains-powered (USB-C)
 
-**BBQ probes** (planned — see [Roadmap](#roadmap--to-do))
-- *Wireless option:* off-the-shelf BLE BBQ thermometers (e.g. Wenmeice/Inkbird
-  style), read passively from the ESP32-S3's built-in Bluetooth.
-- *Wired satellite option:* a small ESP32-S3-Zero node with up to 4× MAX31855
-  amplifiers reading **Type-K thermocouples**, relaying readings over BLE.
-  Type-K is required for Big Green Egg-class grill-ambient temperatures
-  (fibreglass/mineral-insulated leads for the high-heat grill probe; food-grade
-  stainless probes for meat).
+**BBQ probes** — via the companion **[ESP BLE BBQ Box](https://github.com/CoopsInChina/ESP-BLE-BBQ-Box)** gateway
+- The Box reads up to **4× Type-K thermocouples** (MAX31855) *and* connects to
+  **wireless BLE probes**, then broadcasts everything in one connectionless BLE
+  advertisement.
+- This display is a passive **observer** of that advertisement — no pairing, no
+  per-probe cost on the display. Type-K covers Big Green Egg-class grill-ambient
+  temperatures (fibreglass/mineral-insulated leads); food-grade stainless or
+  wireless probes suit the meat.
+- *(Planned)* a standalone mode where the display connects **directly** to a
+  single wireless probe without the Box (see [Roadmap](#roadmap--to-do)).
 
 ---
 
@@ -128,22 +131,34 @@ touch to wake. Dimming and screensaver timers are configurable in Settings.
 
 ## BBQ monitoring
 
-> The BBQ screens are complete; the probe **data source is currently mocked**
-> until the BLE/thermocouple backend lands (see Roadmap). The "＋" and Bluetooth
-> controls simulate connecting/disconnecting a probe so the UI states can be
-> exercised.
+Temperatures arrive over BLE from the **BBQ Box** gateway (thermocouples +
+wireless probes). The model is **sensor-centric**: every sensor is allocated to
+a **grill number** and a **role** — grill-ambient or meat — with its own target.
+Allocations are **saved to NVS**, so a cook survives a reboot. A grill can carry
+several meats, each shown on its own screen.
 
-- Supports up to **4 grills**; swipe left/right to move between grills and the
-  **Add Grill** slot.
-- Each grill shows **two concentric gauges** — outer = grill temperature,
-  inner = meat temperature — filling toward their targets, with a centre meat
-  icon and live/target readouts.
-- **Config (gear):** set the **target grill temperature** (5 °C steps, applied
-  live) and pick the meat — **Chicken / Lamb / Pork / Beef**. Chicken uses a
-  single food-safe target; the others open a **doneness** slider
-  (rare → well-done) whose targets come from `data/meat_temps.json`.
-- **Bluetooth icon:** blue when a probe is connected, grey when not; a
-  disconnected probe raises a flashing alarm.
+**On the display**
+- The BBQ carousel shows **one gauge screen per meat** (labelled with its grill
+  number, sharing that grill's ambient reading), plus ambient-only screens and
+  an **Add Meat** slot; swipe to move between them.
+- Two concentric gauges — outer = grill temp, inner = meat temp — fill toward
+  their targets, with a centre meat icon and live/target readouts ("– C" until
+  the sensor reports).
+- **Add Meat wizard:** pick a grill → pick a free sensor → pick its type (only
+  asked when the grill has no ambient sensor yet) → set the target (grill-temp
+  slider, or meat kind + doneness). Meats: **Chicken / Lamb / Pork / Beef** —
+  chicken uses a single food-safe target; the rest use a **doneness** slider
+  whose targets come from `data/meat_temps.json`.
+- **⚙ Config** on any screen re-opens that sensor's settings; a **🗑 delete**
+  frees it.
+- The **Bluetooth icon** reflects the Box link — blue when the Box is being
+  heard, dim when it's silent.
+
+**On the web** — `http://<device-ip>/bbq`
+- Live view **and** allocation for every sensor via **Grill # ▸ Type ▸ Meat ▸
+  Target** dropdowns (meat targets use the same doneness table as the display).
+- The web page and the on-screen config write the **same** NVS-backed model, so
+  edits from either surface stay in sync.
 
 ---
 
@@ -159,15 +174,17 @@ src/
   ui_favourites.c        favourites carousel
   ui_volume.c            volume arc
   ui_settings.c          settings carousel (WiFi/Speaker/OTA/Screensaver/About)
-  ui_bbq.c               grill carousel + gauges
-  ui_bbq_config.c        grill config (target temp + meat select)
+  ui_bbq.c               cook-view carousel + gauges (one screen per meat)
+  ui_bbq_add.c           "Add Meat" wizard (grill → sensor → type)
+  ui_bbq_config.c        sensor config (grill target / meat select, delete)
   ui_bbq_doneness.c      doneness selection
   ui_widgets.c           clock + weather screensaver
-  bbq_controller.*       grill/probe data model (mock probe backend)
+  bbq_controller.*       sensor-centric BBQ model + NVS persistence
+  bbq_ble.*              passive BLE observer of the BBQ Box advertisement
   sonos_controller.c     Sonos discovery, polling, playback, favourites
   ui_art.c               album-art download / decode / cache
   cst820.c / tca9554.c   touch + IO-expander drivers
-  web_server.c           /setup web UI for favourites & WiFi
+  web_server.c           /setup (favourites & WiFi) + /bbq (sensor allocation)
   img_*.c                generated image assets
 data/meat_temps.json     meat doneness → target-temperature table (tracked)
 scripts/                 codegen for meat data + icons
@@ -178,9 +195,17 @@ partitions.csv           16 MB flash layout (dual OTA + 2 MB SPIFFS art cache)
 
 ## Roadmap / to-do
 
-- **BBQ probe backend:** replace the mock in `bbq_controller.c` with real
-  readings — passive BLE scanning of wireless thermometers and/or the wired
-  ESP32-S3-Zero + MAX31855 + Type-K satellite.
+- **Standalone wireless probe:** let the display connect **directly** to a
+  single BLE probe (no Box), with a **Settings page to switch** between
+  "BBQ Box" and "Wireless Probe" source modes.
+- **Web consolidation:** merge the Favourites setup (`/setup`) and BBQ sensor
+  setup (`/bbq`) onto a single view.
+- **Add Meat wizard polish:** tidy minor UI overlaps in the wizard step screens
+  (low priority).
+- **Box gateway bring-up:** finish wireless-probe support on the Box side
+  (probes report as 0 until it connects/forwards them).
+- **Cleanup:** prune the now-dead legacy grill shim in `bbq_controller.c`
+  (`bbq_get_grill` / `bbq_set_targets` / `bbq_add_grill` / mock hooks).
 - **Now-playing progress:** parse and display track progress on the music arc.
 - **Memory:** screens are cached for the session and never freed, so the LVGL
   object pool only grows. Free unused screens (wire up `ui_screen_invalidate()`)

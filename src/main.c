@@ -183,11 +183,16 @@ void app_main(void)
     }
 
     // ── Background tasks ──────────────────────────────────────────────
+    // BLE first: the controller needs a large contiguous block of internal
+    // DRAM at init. Spawning the Sonos/art/weather tasks beforehand fragments
+    // DRAM enough that esp_bt_controller_init() fails with "Malloc failed".
+    // WiFi is already up, so coexistence is handled from here on.
+    bbq_ble_init();   // passive BLE scan for the BBQ Box gateway (after WiFi)
+
     ui_art_init();
     weather_init();
     sonos_controller_start_polling();
     wifi_manager_start_monitor();
-    bbq_ble_init();   // passive BLE scan for the BBQ Box satellite (after WiFi)
 
     // Autodim check timer — fires every 3s (identical to SonosESP main loop cadence)
     TimerHandle_t autodim_timer = xTimerCreate("autodim", pdMS_TO_TICKS(3000),

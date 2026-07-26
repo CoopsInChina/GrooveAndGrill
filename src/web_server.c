@@ -1,12 +1,16 @@
 #include "web_server.h"
 #include "sonos_controller.h"
 #include "wifi_manager.h"
+#include "bbq_ble.h"
+#include "bbq_controller.h"
+#include "meat_temps.h"
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 static const char *TAG = "web";
 static httpd_handle_t s_server = NULL;
@@ -604,6 +608,183 @@ static esp_err_t root_handler(httpd_req_t *req)
     return httpd_resp_send(req, NULL, 0);
 }
 
+// ---- BBQ sensor allocation page ------------------------------------
+// One row per sensor (wired thermocouple or wireless probe) with its live
+// temperature and dropdowns to allocate it: Grill # -> Type -> Meat -> Target.
+// Writes go through bbq_sensor_assign() (NVS-persisted). The meat doneness
+// options come from meat_temps.h so they match the on-screen selection.
+
+// MEAT_TYPES order (Beef, Lamb, Pork) -> meat_kind_t enum value.
+static const int s_meat_type_kind[MEAT_TYPE_COUNT] = {
+    MEAT_KIND_BEEF, MEAT_KIND_LAMB, MEAT_KIND_PORK,
+};
+
+static esp_err_t bbq_data_handler(httpd_req_t *req)
+{
+    static char json[3072];   // single httpd worker -> static is safe
+    int n = 0;
+
+    n += snprintf(json + n, sizeof(json) - n,
+                  "{\"grills\":%d,\"box\":%s,\"meats\":[",
+                  MAX_GRILLS, bbq_ble_present() ? "true" : "false");
+
+    // Doneness tables (Beef/Lamb/Pork) + chicken's single food-safety target.
+    for (int m = 0; m < MEAT_TYPE_COUNT; m++) {
+        n += snprintf(json + n, sizeof(json) - n, "%s{\"kind\":%d,\"lv\":[",
+                      m ? "," : "", s_meat_type_kind[m]);
+        for (int l = 0; l < MEAT_TYPES[m].level_count; l++)
+            n += snprintf(json + n, sizeof(json) - n, "%s[\"%s\",%d]",
+                          l ? "," : "", MEAT_TYPES[m].levels[l].label,
+                          MEAT_TYPES[m].levels[l].target_c);
+        n += snprintf(json + n, sizeof(json) - n, "]}");
+    }
+    n += snprintf(json + n, sizeof(json) - n,
+                  ",{\"kind\":%d,\"lv\":[[\"Safe\",%d]]}]",
+                  MEAT_KIND_CHICKEN, CHICKEN_SAFE_TARGET_C);
+
+    // Sensors.
+    n += snprintf(json + n, sizeof(json) - n, ",\"sensors\":[");
+    int count = bbq_sensor_count(), wnum = 0, emitted = 0;
+    for (int i = 0; i < count; i++) {
+        bbq_sensor_t s;
+        if (!bbq_sensor_at(i, &s)) continue;
+        char name[40];
+        if (s.src == SRC_TC) snprintf(name, sizeof(name), "Wired Temp Sensor %d", s.hw_id + 1);
+        else                 snprintf(name, sizeof(name), "Wireless Temp Sensor %d", ++wnum);
+        n += snprintf(json + n, sizeof(json) - n,
+                      "%s{\"src\":%d,\"hw\":%d,\"name\":\"%s\",\"present\":%s,\"temp\":",
+                      emitted ? "," : "", (int)s.src, s.hw_id, name,
+                      s.present ? "true" : "false");
+        if (s.present) n += snprintf(json + n, sizeof(json) - n, "%.1f", s.temp_c);
+        else           n += snprintf(json + n, sizeof(json) - n, "null");
+        n += snprintf(json + n, sizeof(json) - n,
+                      ",\"grill\":%d,\"role\":%d,\"kind\":%d,\"target\":%d}",
+                      s.grill_num, (int)s.role, (int)s.meat_kind, s.target_c);
+        emitted++;
+    }
+    snprintf(json + n, sizeof(json) - n, "]}");
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, json);
+}
+
+// POST /bbq_assign  body: src=&hw=&grill=&role=&kind=&target=
+static esp_err_t bbq_assign_handler(httpd_req_t *req)
+{
+    char body[128] = {0};
+    int  len = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (len <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body"); return ESP_FAIL; }
+    body[len] = '\0';
+
+    char v[16];
+    form_field(body, "src",    v, sizeof(v)); int src    = atoi(v);
+    form_field(body, "hw",     v, sizeof(v)); int hw     = atoi(v);
+    form_field(body, "grill",  v, sizeof(v)); int grill  = atoi(v);
+    form_field(body, "role",   v, sizeof(v)); int role   = atoi(v);
+    form_field(body, "kind",   v, sizeof(v)); int kind   = atoi(v);
+    form_field(body, "target", v, sizeof(v)); int target = atoi(v);
+
+    bbq_sensor_assign((sensor_src_t)src, (uint8_t)hw, (uint8_t)grill,
+                      (sensor_role_t)role, (meat_kind_t)kind, target);
+    ESP_LOGI(TAG, "assign src=%d hw=%d -> grill=%d role=%d kind=%d target=%d",
+             src, hw, grill, role, kind, target);
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+static esp_err_t bbq_get_handler(httpd_req_t *req)
+{
+    static const char PAGE[] =
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>BBQ Sensors</title><style>"
+        "body{font-family:-apple-system,sans-serif;background:#111;color:#eee;"
+        "max-width:520px;margin:0 auto;padding:20px 14px}"
+        "h1{color:#e87722;font-size:1.2em;text-align:center;margin-bottom:2px}"
+        "#s{color:#888;text-align:center;margin-bottom:16px;font-size:.85em}"
+        ".card{background:#1c1c1c;border-radius:10px;padding:12px 14px;margin:10px 0}"
+        ".hdr{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}"
+        ".name{font-weight:600}.temp{font-size:1.3em;font-weight:700}"
+        ".ok{color:#1ed760}.bad{color:#ff5555}"
+        ".ctl{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end}"
+        ".ctl label{font-size:.72rem;color:#999;display:block;margin-bottom:2px}"
+        "select,input{background:#262626;border:1px solid #333;border-radius:6px;"
+          "color:#eee;padding:6px 8px;font-size:.9rem}"
+        ".fld{min-width:0}.fld select,.fld input{width:100%;box-sizing:border-box}"
+        "button{background:#e87722;color:#000;border:none;border-radius:6px;"
+          "padding:8px 14px;font-weight:600;margin-top:10px;cursor:pointer}"
+        "button:disabled{background:#444;color:#888}"
+        ".empty{color:#666;text-align:center;padding:24px 0}"
+        ".hide{display:none}"
+        "</style></head><body>"
+        "<h1>BBQ Sensors</h1><div id='s'>loading&hellip;</div><div id='list'></div>"
+        "<script>"
+        "var MEATS={},GRILLS=1,KEYS=[];"
+        "var KINDS=[[4,'Beef'],[2,'Lamb'],[3,'Pork'],[1,'Chicken']];"
+        "function opt(v,t,sel){return '<option value=\"'+v+'\"'+(sel?' selected':'')+'>'+t+'</option>';}"
+        "function key(s){return s.src+'_'+s.hw;}"
+        "function tgtOpts(kind,cur){var a=MEATS[kind]||[];var h='';"
+          "for(var i=0;i<a.length;i++)h+=opt(a[i][1],a[i][0]+' ('+a[i][1]+'\\u00b0C)',a[i][1]==cur);return h;}"
+        "function row(s){var k=key(s);"
+          "var g='<label>Grill</label><select class=grill>'+opt(0,'\\u2014',!s.grill);"
+          "for(var i=1;i<=GRILLS;i++)g+=opt(i,'Grill '+i,s.grill==i);g+='</select>';"
+          "var r='<label>Type</label><select class=role>'+opt(0,'Unassigned',s.role==0)+"
+            "opt(1,'Grill Temp',s.role==1)+opt(2,'Meat',s.role==2)+'</select>';"
+          "var mk='<label>Meat</label><select class=kind>';"
+          "for(var i=0;i<KINDS.length;i++)mk+=opt(KINDS[i][0],KINDS[i][1],s.kind==KINDS[i][0]);mk+='</select>';"
+          "var tm='<label>Target</label><select class=tmeat>'+tgtOpts(s.kind||4,s.target)+'</select>';"
+          "var tg='<label>Target \\u00b0C</label><input class=tgrill type=number step=5 min=40 max=400 value=\"'+(s.target||110)+'\">';"
+          "return '<div class=card data-k=\"'+k+'\" data-src=\"'+s.src+'\" data-hw=\"'+s.hw+'\">'"
+            "+'<div class=hdr><span class=name>'+s.name+'</span>"
+                "<span class=\"temp '+(s.present?'ok':'bad')+'\" id=\"t_'+k+'\">'"
+                "+(s.present?(s.temp.toFixed(1)+' \\u00b0C'):'Not connected')+'</span></div>'"
+            "+'<div class=ctl><div class=fld>'+g+'</div><div class=fld>'+r+'</div>'"
+                "+'<div class=\"fld mk\">'+mk+'</div><div class=\"fld tm\">'+tm+'</div>'"
+                "+'<div class=\"fld tg\">'+tg+'</div></div>'"
+            "+'<button class=save disabled>Saved</button></div>';}"
+        "function sync(c){var role=+c.querySelector('.role').value;"
+          "c.querySelector('.mk').classList.toggle('hide',role!=2);"
+          "c.querySelector('.tm').classList.toggle('hide',role!=2);"
+          "c.querySelector('.tg').classList.toggle('hide',role!=1);}"
+        "function dirty(c){var b=c.querySelector('.save');b.disabled=false;b.textContent='Save';}"
+        "function wire(c){"
+          "c.querySelector('.role').onchange=function(){sync(c);dirty(c);};"
+          "c.querySelector('.grill').onchange=function(){dirty(c);};"
+          "c.querySelector('.kind').onchange=function(){"
+            "var k=+this.value,cur=+c.querySelector('.tmeat').value;"
+            "c.querySelector('.tmeat').innerHTML=tgtOpts(k,cur);dirty(c);};"
+          "c.querySelector('.tmeat').onchange=function(){dirty(c);};"
+          "c.querySelector('.tgrill').oninput=function(){dirty(c);};"
+          "c.querySelector('.save').onclick=function(){save(c);};sync(c);}"
+        "function save(c){var role=+c.querySelector('.role').value;"
+          "var target=role==2?+c.querySelector('.tmeat').value:role==1?+c.querySelector('.tgrill').value:0;"
+          "var body='src='+c.dataset.src+'&hw='+c.dataset.hw+'&grill='+c.querySelector('.grill').value"
+            "+'&role='+role+'&kind='+c.querySelector('.kind').value+'&target='+target;"
+          "var b=c.querySelector('.save');b.disabled=true;b.textContent='Saving\\u2026';"
+          "fetch('/bbq_assign',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})"
+            ".then(function(){b.textContent='Saved';}).catch(function(){b.textContent='Save';b.disabled=false;});}"
+        "function build(d){GRILLS=d.grills;MEATS={};"
+          "for(var i=0;i<d.meats.length;i++)MEATS[d.meats[i].kind]=d.meats[i].lv;"
+          "var L=document.getElementById('list');"
+          "if(!d.sensors.length){L.innerHTML='<div class=empty>No sensors detected yet.</div>';KEYS=[];return;}"
+          "KEYS=d.sensors.map(key);L.innerHTML=d.sensors.map(row).join('');"
+          "var cards=L.querySelectorAll('.card');for(var i=0;i<cards.length;i++)wire(cards[i]);}"
+        "function refresh(d){for(var i=0;i<d.sensors.length;i++){var s=d.sensors[i];"
+          "var t=document.getElementById('t_'+key(s));if(!t)continue;"
+          "t.textContent=s.present?(s.temp.toFixed(1)+' \\u00b0C'):'Not connected';"
+          "t.className='temp '+(s.present?'ok':'bad');}}"
+        "function poll(first){fetch('/bbq_data').then(r=>r.json()).then(function(d){"
+          "document.getElementById('s').textContent=d.box?'box online':'box not heard \\u2014 scanning\\u2026';"
+          "var kk=d.sensors.map(key).join(',');"
+          "if(first||kk!=KEYS.join(','))build(d);else refresh(d);"
+        "}).catch(function(){});}"
+        "poll(true);setInterval(function(){poll(false);},2000);"
+        "</script></body></html>";
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, PAGE, HTTPD_RESP_USE_STRLEN);
+}
+
 // ---- Public API -----------------------------------------------------
 
 bool web_server_start(void)
@@ -612,7 +793,7 @@ bool web_server_start(void)
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port       = 80;
-    cfg.max_uri_handlers  = 10;
+    cfg.max_uri_handlers  = 12;
     cfg.recv_wait_timeout = 30;   // seconds — needed for 25KB art upload
 
     if (httpd_start(&s_server, &cfg) != ESP_OK) {
@@ -628,8 +809,11 @@ bool web_server_start(void)
         { .uri = "/add_by_url",    .method = HTTP_POST, .handler = add_by_url_handler      },
         { .uri = "/del_custom",    .method = HTTP_POST, .handler = del_custom_handler      },
         { .uri = "/upload_art",    .method = HTTP_POST, .handler = upload_art_handler      },
+        { .uri = "/bbq",           .method = HTTP_GET,  .handler = bbq_get_handler         },
+        { .uri = "/bbq_data",      .method = HTTP_GET,  .handler = bbq_data_handler        },
+        { .uri = "/bbq_assign",    .method = HTTP_POST, .handler = bbq_assign_handler      },
     };
-    for (int i = 0; i < 7; i++)
+    for (int i = 0; i < (int)(sizeof(uris) / sizeof(uris[0])); i++)
         httpd_register_uri_handler(s_server, &uris[i]);
 
     ESP_LOGI(TAG, "Setup server: http://%s/setup", wifi_manager_ip());

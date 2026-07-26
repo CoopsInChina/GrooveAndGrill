@@ -64,5 +64,6 @@
 // ---- Temperature sensor (SHT40, I2C shared bus) ----
 #define SHT40_I2C_ADDR          0x44
 
-// ---- BBQ probes (future) ----
+// ---- BBQ probes ----
 #define MAX_BBQ_PROBES          4
+#define NVS_KEY_BBQ_ALLOC       "bbq_alloc"  // blob: sensor→grill allocations

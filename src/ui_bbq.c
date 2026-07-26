@@ -1,6 +1,7 @@
 #include "ui_bbq.h"
 #include "ui_common.h"
 #include "ui_bbq_config.h"
+#include "ui_bbq_add.h"
 #include "bbq_controller.h"
 #include "img_meat_icons.h"
 #include "lvgl.h"
@@ -41,10 +42,9 @@ static lv_obj_t *s_lbl_end_meat  = NULL;   // inner arc end value
 static lv_obj_t *s_add_grill_lbl = NULL;
 static lv_obj_t *s_add_grill_btn = NULL;
 
-static lv_timer_t *s_blink_timer = NULL;
+static lv_timer_t *s_refresh_timer = NULL;
 static int         s_index         = 0;
 static bool        s_gesture_fired = false;
-static bool        s_blink_on      = false;
 
 static void show_index(int idx);
 
@@ -53,11 +53,10 @@ static void show_index(int idx);
 static void go_next(void)
 {
     s_gesture_fired = true;
-    int count = bbq_grill_count();
-    // The add-grill slot only exists while under the grill cap — once at
-    // MAX_GRILLS there's nothing to add, so don't show a dead-end "+".
-    int last_idx = (count < MAX_GRILLS) ? count : count - 1;
-    if (s_index < last_idx) {
+    // Slots: [0..count-1] are cook views (one per meat / ambient-only grill),
+    // [count] is the "Add Meat" slot. Swiping past that goes home.
+    int count = bbq_view_count();
+    if (s_index < count) {
         show_index(s_index + 1);
     } else {
         ui_navigate_to(SCREEN_MENU);
@@ -105,8 +104,17 @@ static void probe_btn_cb(lv_event_t *e)
 static void config_btn_cb(lv_event_t *e)
 {
     if (s_gesture_fired) { s_gesture_fired = false; return; }
+    // Edit the sensor behind this view: its meat, or (for an ambient-only
+    // view) its grill sensor.
+    bbq_view_t v;
+    if (!bbq_view_at(s_index, &v)) return;
+    bbq_setup_t s = { .grill_num = v.grill_num };
+    if (v.has_meat)             { s.src = v.meat_src;  s.hw_id = v.meat_hw_id;  s.role = ROLE_MEAT;  }
+    else if (v.grill_assigned)  { s.src = v.grill_src; s.hw_id = v.grill_hw_id; s.role = ROLE_GRILL; }
+    else return;
+    bbq_setup_set(&s);
     ui_navigate_to(SCREEN_BBQ_CONFIG);
-    ui_bbq_config_set_target(s_index);
+    ui_bbq_config_begin();
 }
 
 static void home_btn_cb(lv_event_t *e)
@@ -115,27 +123,21 @@ static void home_btn_cb(lv_event_t *e)
     ui_navigate_to(SCREEN_MENU);
 }
 
-static void add_grill_btn_cb(lv_event_t *e)
+static void add_meat_btn_cb(lv_event_t *e)
 {
     if (s_gesture_fired) { s_gesture_fired = false; return; }
-    if (bbq_add_grill())
-        show_index(bbq_grill_count() - 1);
+    ui_navigate_to(SCREEN_BBQ_ADD);   // grill# -> sensor -> type wizard
 }
 
-// ---- Alarm blink (probe disconnected) ---------------------------------
+// ---- Live refresh -----------------------------------------------------
+// Re-reads the model each second so gauges/readouts track incoming BLE
+// temperatures. Only redraws while the BBQ screen is actually on top.
 
-static void blink_timer_cb(lv_timer_t *t)
+static void refresh_timer_cb(lv_timer_t *t)
 {
-    if (!s_alarm_icon) return;
-    int count = bbq_grill_count();
-    if (s_index >= count) return;   // on the add-grill slot, nothing to blink
-
-    const bbq_grill_t *g = bbq_get_grill(s_index);
-    if (!g || g->probe_state != PROBE_DISCONNECTED) return;
-
-    s_blink_on = !s_blink_on;
-    if (s_blink_on) lv_obj_clear_flag(s_alarm_icon, LV_OBJ_FLAG_HIDDEN);
-    else            lv_obj_add_flag(s_alarm_icon,   LV_OBJ_FLAG_HIDDEN);
+    (void)t;
+    if (!s_scr || lv_scr_act() != s_scr) return;
+    show_index(s_index);
 }
 
 static const lv_img_dsc_t *meat_icon_for(meat_kind_t kind)
@@ -157,15 +159,6 @@ static void set_arc_neutral(lv_obj_t *arc)
     lv_arc_set_value(arc, 0);
     lv_obj_set_style_arc_color(arc, COL_BUTTON, LV_PART_MAIN);
     lv_obj_set_style_arc_opa(arc, LV_OPA_TRANSP, LV_PART_INDICATOR);
-}
-
-static void set_arc_placeholder(lv_obj_t *arc, lv_color_t pale, lv_color_t bright)
-{
-    lv_arc_set_range(arc, 0, 100);
-    lv_arc_set_value(arc, 50);
-    lv_obj_set_style_arc_color(arc, pale, LV_PART_MAIN);
-    lv_obj_set_style_arc_opa(arc, LV_OPA_COVER, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(arc, bright, LV_PART_INDICATOR);
 }
 
 static void set_arc_no_reading(lv_obj_t *arc, int target, lv_color_t pale)
@@ -199,7 +192,7 @@ static void scr_loaded_cb(lv_event_t *e)
 
 static void scr_del_cb(lv_event_t *e)
 {
-    if (s_blink_timer) { lv_timer_del(s_blink_timer); s_blink_timer = NULL; }
+    if (s_refresh_timer) { lv_timer_del(s_refresh_timer); s_refresh_timer = NULL; }
     s_scr = s_title_lbl = s_outer_arc = s_inner_arc = NULL;
     s_meat_name = s_meat_val = s_grill_name = s_grill_val = NULL;
     s_meat_icon = s_noprobe_lbl = s_add_probe_btn = s_alarm_icon = NULL;
@@ -416,7 +409,7 @@ lv_obj_t *ui_bbq_create(void)
 
     // ---- Add-Grill slot (shown only when index == grill count) ----
     s_add_grill_lbl = lv_label_create(s_scr);
-    lv_label_set_text(s_add_grill_lbl, "Add Grill");
+    lv_label_set_text(s_add_grill_lbl, "Add Meat");
     lv_obj_set_style_text_color(s_add_grill_lbl, COL_ACCENT2, 0);
     lv_obj_set_style_text_font(s_add_grill_lbl, &lv_font_montserrat_28, 0);
     lv_obj_align(s_add_grill_lbl, LV_ALIGN_CENTER, 0, -60);
@@ -430,7 +423,7 @@ lv_obj_t *ui_bbq_create(void)
     lv_obj_set_style_border_color(s_add_grill_btn, COL_ACCENT2, 0);
     lv_obj_set_style_border_width(s_add_grill_btn, 2, 0);
     lv_obj_set_style_shadow_width(s_add_grill_btn, 0, 0);
-    lv_obj_add_event_cb(s_add_grill_btn, add_grill_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_add_grill_btn, add_meat_btn_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *add_grill_icon = lv_label_create(s_add_grill_btn);
     lv_label_set_text(add_grill_icon, LV_SYMBOL_PLUS);
@@ -438,7 +431,7 @@ lv_obj_t *ui_bbq_create(void)
     lv_obj_set_style_text_font(add_grill_icon, &lv_font_montserrat_28, 0);
     lv_obj_center(add_grill_icon);
 
-    s_blink_timer = lv_timer_create(blink_timer_cb, 500, NULL);
+    s_refresh_timer = lv_timer_create(refresh_timer_cb, 1000, NULL);
 
     show_index(0);
     return s_scr;
@@ -451,19 +444,19 @@ static void show_index(int idx)
     s_index = idx;
     if (!s_scr) return;
 
-    int count   = bbq_grill_count();
+    int count   = bbq_view_count();
     bool is_add = (idx >= count);
 
-    // Gauges, end labels, probe controls — grill-screen only. (The readout
-    // labels are driven separately below since they depend on probe state.)
-    lv_obj_t *grill_only[] = {
+    // View widgets (gauges, end labels, config + BT). The "Add Meat" slot hides
+    // them; a cook view shows them.
+    lv_obj_t *view_only[] = {
         s_outer_arc, s_inner_arc, s_lbl_end_left, s_lbl_end_grill, s_lbl_end_meat,
-        s_config_btn,
+        s_config_btn, s_probe_btn,
     };
-    for (size_t i = 0; i < sizeof(grill_only) / sizeof(grill_only[0]); i++) {
-        if (!grill_only[i]) continue;
-        if (is_add) lv_obj_add_flag(grill_only[i],   LV_OBJ_FLAG_HIDDEN);
-        else        lv_obj_clear_flag(grill_only[i], LV_OBJ_FLAG_HIDDEN);
+    for (size_t i = 0; i < sizeof(view_only) / sizeof(view_only[0]); i++) {
+        if (!view_only[i]) continue;
+        if (is_add) lv_obj_add_flag(view_only[i],   LV_OBJ_FLAG_HIDDEN);
+        else        lv_obj_clear_flag(view_only[i], LV_OBJ_FLAG_HIDDEN);
     }
 
     lv_obj_t *add_only[] = { s_add_grill_lbl, s_add_grill_btn };
@@ -475,47 +468,38 @@ static void show_index(int idx)
 
     lv_obj_t *readout[] = { s_meat_name, s_meat_val, s_grill_name, s_grill_val };
 
+    // Retired legacy mock controls — always hidden now.
+    if (s_add_probe_btn) lv_obj_add_flag(s_add_probe_btn, LV_OBJ_FLAG_HIDDEN);
+    if (s_noprobe_lbl)   lv_obj_add_flag(s_noprobe_lbl,   LV_OBJ_FLAG_HIDDEN);
+    if (s_alarm_icon)    lv_obj_add_flag(s_alarm_icon,    LV_OBJ_FLAG_HIDDEN);
+
     if (is_add) {
-        if (s_title_lbl)   lv_obj_add_flag(s_title_lbl, LV_OBJ_FLAG_HIDDEN);
-        if (s_meat_icon)   lv_obj_add_flag(s_meat_icon, LV_OBJ_FLAG_HIDDEN);
-        if (s_noprobe_lbl) lv_obj_add_flag(s_noprobe_lbl, LV_OBJ_FLAG_HIDDEN);
-        if (s_add_probe_btn) lv_obj_add_flag(s_add_probe_btn, LV_OBJ_FLAG_HIDDEN);
-        if (s_alarm_icon)  lv_obj_add_flag(s_alarm_icon, LV_OBJ_FLAG_HIDDEN);
-        if (s_probe_btn)   lv_obj_add_flag(s_probe_btn, LV_OBJ_FLAG_HIDDEN);
+        if (s_title_lbl) lv_obj_add_flag(s_title_lbl, LV_OBJ_FLAG_HIDDEN);
+        if (s_meat_icon) lv_obj_add_flag(s_meat_icon, LV_OBJ_FLAG_HIDDEN);
         for (size_t i = 0; i < sizeof(readout) / sizeof(readout[0]); i++)
             if (readout[i]) lv_obj_add_flag(readout[i], LV_OBJ_FLAG_HIDDEN);
         return;
     }
 
+    bbq_view_t v;
+    if (!bbq_view_at(idx, &v)) return;
+
     if (s_title_lbl) {
         char buf[32];
-        snprintf(buf, sizeof(buf), "Grill %d", idx + 1);
+        snprintf(buf, sizeof(buf), "Grill %d", v.grill_num);
         lv_label_set_text(s_title_lbl, buf);
         lv_obj_clear_flag(s_title_lbl, LV_OBJ_FLAG_HIDDEN);
     }
 
-    const bbq_grill_t *g = bbq_get_grill(idx);
-    if (!g) return;
-
-    bool has_probe = (g->probe_state != PROBE_NONE);
-    bool live       = (g->probe_state == PROBE_CONNECTED);
-
-    if (s_noprobe_lbl)    { if (has_probe) lv_obj_add_flag(s_noprobe_lbl, LV_OBJ_FLAG_HIDDEN);
-                             else           lv_obj_clear_flag(s_noprobe_lbl, LV_OBJ_FLAG_HIDDEN); }
-    if (s_add_probe_btn)  { if (has_probe) lv_obj_add_flag(s_add_probe_btn, LV_OBJ_FLAG_HIDDEN);
-                             else           lv_obj_clear_flag(s_add_probe_btn, LV_OBJ_FLAG_HIDDEN); }
-    if (s_probe_btn)      { if (has_probe) lv_obj_clear_flag(s_probe_btn, LV_OBJ_FLAG_HIDDEN);
-                             else           lv_obj_add_flag(s_probe_btn, LV_OBJ_FLAG_HIDDEN); }
-    if (s_alarm_icon && g->probe_state != PROBE_DISCONNECTED)
-        lv_obj_add_flag(s_alarm_icon, LV_OBJ_FLAG_HIDDEN);   // blink timer re-shows it if applicable
-
-    // Bluetooth icon: blue when connected, grey when not (disconnected).
+    // BT dot reflects the box link: blue when the box is being heard, dim when
+    // it's gone silent (the box is the gateway for every sensor on this screen).
     if (s_probe_icon)
         lv_obj_set_style_text_color(s_probe_icon,
-            live ? BT_BLUE : COL_TEXT_DIM, 0);
+            bbq_ble_present() ? BT_BLUE : COL_TEXT_DIM, 0);
 
+    // Meat icon — only on a meat view.
     if (s_meat_icon) {
-        const lv_img_dsc_t *icon = g->configured ? meat_icon_for(g->meat_kind) : NULL;
+        const lv_img_dsc_t *icon = v.has_meat ? meat_icon_for(v.meat_kind) : NULL;
         if (icon) {
             lv_img_set_src(s_meat_icon, icon);
             lv_obj_clear_flag(s_meat_icon, LV_OBJ_FLAG_HIDDEN);
@@ -524,54 +508,46 @@ static void show_index(int idx)
         }
     }
 
-    // Readout: show names + values only when a probe is present. Values take
-    // the ring colours when live, dim placeholders ("- C") when the probe is
-    // present but not reporting.
-    bool show_readout = has_probe;
-    for (size_t i = 0; i < sizeof(readout) / sizeof(readout[0]); i++) {
-        if (!readout[i]) continue;
-        if (show_readout) lv_obj_clear_flag(readout[i], LV_OBJ_FLAG_HIDDEN);
-        else              lv_obj_add_flag(readout[i],   LV_OBJ_FLAG_HIDDEN);
+    // Readout: the Meat line shows on a meat view; the Grill line shows whenever
+    // this grill has an ambient sensor assigned. Each value is dim "- C" until
+    // its sensor reports, then bright in its ring colour.
+    if (s_meat_name)  { if (v.has_meat)      lv_obj_clear_flag(s_meat_name, LV_OBJ_FLAG_HIDDEN);  else lv_obj_add_flag(s_meat_name, LV_OBJ_FLAG_HIDDEN); }
+    if (s_meat_val)   { if (v.has_meat)      lv_obj_clear_flag(s_meat_val,  LV_OBJ_FLAG_HIDDEN);  else lv_obj_add_flag(s_meat_val,  LV_OBJ_FLAG_HIDDEN); }
+    if (s_grill_name) { if (v.grill_assigned) lv_obj_clear_flag(s_grill_name, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(s_grill_name, LV_OBJ_FLAG_HIDDEN); }
+    if (s_grill_val)  { if (v.grill_assigned) lv_obj_clear_flag(s_grill_val,  LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(s_grill_val,  LV_OBJ_FLAG_HIDDEN); }
+
+    if (v.has_meat && s_meat_val) {
+        char b[12];
+        if (v.meat_present) snprintf(b, sizeof(b), "%d C", (int)v.meat_temp_c);
+        else                snprintf(b, sizeof(b), "- C");
+        lv_label_set_text(s_meat_val, b);
+        lv_obj_set_style_text_color(s_meat_val, v.meat_present ? MEAT_BRIGHT : COL_TEXT_DIM, 0);
     }
-    if (show_readout) {
-        char mbuf[12], gbuf[12];
-        if (live) {
-            snprintf(mbuf, sizeof(mbuf), "%d C", (int)g->meat_temp_c);
-            snprintf(gbuf, sizeof(gbuf), "%d C", (int)g->grill_temp_c);
-        } else {
-            snprintf(mbuf, sizeof(mbuf), "- C");
-            snprintf(gbuf, sizeof(gbuf), "- C");
-        }
-        if (s_meat_val)  lv_label_set_text(s_meat_val, mbuf);
-        if (s_grill_val) lv_label_set_text(s_grill_val, gbuf);
-        if (s_meat_val)  lv_obj_set_style_text_color(s_meat_val,
-                             live ? MEAT_BRIGHT : COL_TEXT_DIM, 0);
-        if (s_grill_val) lv_obj_set_style_text_color(s_grill_val,
-                             live ? GRILL_BRIGHT : COL_TEXT_DIM, 0);
+    if (v.grill_assigned && s_grill_val) {
+        char b[12];
+        if (v.grill_present) snprintf(b, sizeof(b), "%d C", (int)v.grill_temp_c);
+        else                 snprintf(b, sizeof(b), "- C");
+        lv_label_set_text(s_grill_val, b);
+        lv_obj_set_style_text_color(s_grill_val, v.grill_present ? GRILL_BRIGHT : COL_TEXT_DIM, 0);
     }
 
-    if (s_lbl_end_grill)
-        lv_label_set_text(s_lbl_end_grill, g->configured ? "" : "- C");
-    if (s_lbl_end_meat)
-        lv_label_set_text(s_lbl_end_meat, g->configured ? "" : "- C");
-    if (g->configured) {
-        char buf[16];
-        if (s_lbl_end_grill) { snprintf(buf, sizeof(buf), "%d C", g->grill_target_c); lv_label_set_text(s_lbl_end_grill, buf); }
-        if (s_lbl_end_meat)  { snprintf(buf, sizeof(buf), "%d C", g->meat_target_c);  lv_label_set_text(s_lbl_end_meat, buf); }
+    // End labels carry each ring's target (blank when that ring is unused).
+    if (s_lbl_end_grill) {
+        if (v.grill_assigned) { char b[16]; snprintf(b, sizeof(b), "%d C", v.grill_target_c); lv_label_set_text(s_lbl_end_grill, b); }
+        else                  lv_label_set_text(s_lbl_end_grill, "");
+    }
+    if (s_lbl_end_meat) {
+        if (v.has_meat) { char b[16]; snprintf(b, sizeof(b), "%d C", v.meat_target_c); lv_label_set_text(s_lbl_end_meat, b); }
+        else            lv_label_set_text(s_lbl_end_meat, "");
     }
 
     // ---- Gauge fill ----
-    if (!g->configured && !has_probe) {
-        set_arc_neutral(s_outer_arc);
-        set_arc_neutral(s_inner_arc);
-    } else if (!g->configured && has_probe) {
-        set_arc_placeholder(s_outer_arc, GRILL_PALE, GRILL_BRIGHT);
-        set_arc_placeholder(s_inner_arc, MEAT_PALE,  MEAT_BRIGHT);
-    } else if (g->configured && !live) {
-        set_arc_no_reading(s_outer_arc, g->grill_target_c, GRILL_PALE);
-        set_arc_no_reading(s_inner_arc, g->meat_target_c,  MEAT_PALE);
-    } else {
-        set_arc_live(s_outer_arc, g->grill_target_c, g->grill_temp_c, GRILL_PALE, GRILL_BRIGHT);
-        set_arc_live(s_inner_arc, g->meat_target_c,  g->meat_temp_c,  MEAT_PALE,  MEAT_BRIGHT);
-    }
+    // Outer = grill ambient.
+    if (!v.grill_assigned)   set_arc_neutral(s_outer_arc);
+    else if (!v.grill_present) set_arc_no_reading(s_outer_arc, v.grill_target_c, GRILL_PALE);
+    else                     set_arc_live(s_outer_arc, v.grill_target_c, v.grill_temp_c, GRILL_PALE, GRILL_BRIGHT);
+    // Inner = this meat.
+    if (!v.has_meat)         set_arc_neutral(s_inner_arc);
+    else if (!v.meat_present) set_arc_no_reading(s_inner_arc, v.meat_target_c, MEAT_PALE);
+    else                     set_arc_live(s_inner_arc, v.meat_target_c, v.meat_temp_c, MEAT_PALE, MEAT_BRIGHT);
 }
