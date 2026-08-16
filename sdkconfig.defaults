@@ -13,6 +13,14 @@ CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 CONFIG_APP_ROLLBACK_ENABLE=y
 
+# Reproducible builds: strips the compile date/time from the embedded app
+# description (that's the only non-deterministic input for a fixed commit +
+# pinned toolchain), so `pio run` on the same commit reproduces the exact
+# same firmware.bin bytes CI published — see "Verifying a release" in the
+# README for how to check this.
+CONFIG_APP_REPRODUCIBLE_BUILD=y
+# CONFIG_APP_COMPILE_TIME_DATE is not set
+
 # PSRAM (OPI 8MB)
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y

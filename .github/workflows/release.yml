@@ -73,9 +73,14 @@ jobs:
           cat > "$OUT/version.json" <<EOF
           {
             "version": "$VER",
-            "file": "firmware.bin"
+            "file": "firmware.bin",
+            "commit": "${{ github.sha }}"
           }
           EOF
+
+          # For verifying a local `pio run` reproduces this exact build —
+          # see "Verifying a release" in the README.
+          (cd "$OUT" && sha256sum bootloader.bin partitions.bin firmware.bin > sha256sums.txt)
 
       - uses: actions/upload-pages-artifact@v3
         with:

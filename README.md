@@ -106,6 +106,26 @@ build_flags =
   finishing boot, the bootloader automatically rolls back to the previous
   slot (`CONFIG_APP_ROLLBACK_ENABLE`).
 
+**Verifying a release** — confirm the binaries CI published are genuinely
+built from the commit `version.json` claims, not something stale or tampered:
+
+1. `version.json` on Pages carries the exact commit: `{"version":"1.0.0",
+   "file":"firmware.bin","commit":"<sha>"}`.
+2. `sha256sums.txt` (same folder) has the published SHA-256 of each binary.
+3. Builds are **reproducible** (`CONFIG_APP_REPRODUCIBLE_BUILD` — strips the
+   compile timestamp, the only non-deterministic input for a fixed commit +
+   pinned toolchain), so rebuilding that exact commit locally reproduces the
+   same bytes:
+   ```bash
+   git checkout <sha>          # the commit named in version.json
+   pio run -e music_meat
+   shasum -a 256 .pio/build/music_meat/firmware.bin
+   ```
+   Compare against the matching line in `sha256sums.txt`. A match confirms
+   CI built from that source with no tampering in between; a mismatch means
+   either the toolchain drifted from the pinned `espressif32@6.9.0` or the
+   published artifact doesn't match that commit.
+
 ---
 
 ## First-time setup
