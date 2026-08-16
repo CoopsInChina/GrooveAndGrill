@@ -8,7 +8,7 @@ volume — and keep an eye on multiple grills and cuts of meat with live gauges,
 reading temperatures over Bluetooth from wired thermocouples and wireless probes
 via a companion **BBQ Box** gateway.
 
-> Firmware version: **0.1.0** · Status: **active development**
+> Firmware version: **1.0.0** · Status: **active development**
 
 ---
 
