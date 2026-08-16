@@ -11,7 +11,7 @@ reading temperatures over Bluetooth from wired thermocouples and wireless
 probes, either via a companion **BBQ Box** gateway or connected directly to
 the display in standalone mode.
 
-> Firmware version: **1.0.0** · Status: **active development**
+> Firmware version: **1.1.0** · Status: **active development**
 
 ---
 
