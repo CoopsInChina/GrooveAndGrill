@@ -99,7 +99,16 @@ CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
-CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+# Direct wireless-probe mode holds up to 2 concurrent probe connections.
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
+# NimBLE host stack's dynamic allocations (connection/GATT state, scales with
+# MAX_CONNECTIONS) → PSRAM instead of internal DRAM. Going from 1 to 2
+# connections cost enough internal DRAM to starve the Sonos cmd_task again;
+# this is the structural fix rather than shaving more buffers. Only the
+# controller's own link-layer/DMA buffers (CONFIG_BT_CTRL_* below) must stay
+# internal — those are unaffected by this setting.
+# CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL is not set
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
 
 # Controller/host memory trims — this build is DRAM-tight and the BLE
 # controller needs a contiguous internal-DRAM block at init. These keep it
@@ -108,11 +117,10 @@ CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 # controller gets first claim on unfragmented DRAM — without that ordering,
 # init fails with "BLE_INIT: Malloc failed".)
 #
-# We only ever maintain ONE BLE link at a time — either observing the BBQ Box
-# or connecting to a single direct wireless probe (selectable in settings) —
-# so MAX_ACT=2 (one scan + one connection) is all we need, and the controller's
-# adv-report + scan-dedup buffers can be small (we pass filter_duplicates=0).
-CONFIG_BT_CTRL_BLE_MAX_ACT=2
+# Box mode uses one scan; direct-probe mode uses one scan + up to two probe
+# connections, so MAX_ACT=3 covers the worst case. The controller's adv-report
+# + scan-dedup buffers can stay small (we pass filter_duplicates=0).
+CONFIG_BT_CTRL_BLE_MAX_ACT=3
 CONFIG_BT_CTRL_BLE_ADV_REPORT_FLOW_CTRL_NUM=16
 CONFIG_BT_CTRL_SCAN_DUPL_CACHE_SIZE=16
 CONFIG_BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT=6

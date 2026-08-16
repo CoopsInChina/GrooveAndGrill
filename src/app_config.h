@@ -67,3 +67,5 @@
 // ---- BBQ probes ----
 #define MAX_BBQ_PROBES          4
 #define NVS_KEY_BBQ_ALLOC       "bbq_alloc"  // blob: sensor→grill allocations
+#define NVS_KEY_BBQ_SOURCE      "bbq_source" // u8: 0=BBQ Box (observer), 1=direct wireless probe
+#define NVS_KEY_BBQ_PSLOTS      "bbq_pslots" // blob: direct-probe hw_id -> stable UI slot (1/2)

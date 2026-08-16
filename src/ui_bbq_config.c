@@ -1,6 +1,7 @@
 #include "ui_bbq_config.h"
 #include "ui_common.h"
 #include "ui_bbq_doneness.h"
+#include "ui_bbq.h"
 #include "bbq_controller.h"
 #include "meat_temps.h"
 #include "img_meat_icons.h"
@@ -84,6 +85,7 @@ static void confirm_btn_cb(lv_event_t *e)
     // Grill-temp sensor: the slider already assigned it live, but confirm here
     // in case it was never dragged (defaults still apply).
     apply_grill_temp(slider_celsius());
+    ui_bbq_set_index(bbq_view_index_for(s_src, s_hw_id));
     ui_navigate_to(SCREEN_BBQ);
 }
 
@@ -91,6 +93,7 @@ static void trash_btn_cb(lv_event_t *e)
 {
     // Remove this allocation (deletes the meat / frees the sensor).
     bbq_sensor_unassign(s_src, s_hw_id);
+    ui_bbq_set_index(0);   // that view is gone — land somewhere sane
     ui_navigate_to(SCREEN_BBQ);
 }
 
@@ -114,6 +117,7 @@ static void meat_btn_cb(lv_event_t *e)
         // Poultry has one food-safety target — no doneness preference to pick.
         bbq_sensor_assign(s_src, s_hw_id, s_grill_num, ROLE_MEAT,
                           MEAT_KIND_CHICKEN, CHICKEN_SAFE_TARGET_C);
+        ui_bbq_set_index(bbq_view_index_for(s_src, s_hw_id));
         ui_navigate_to(SCREEN_BBQ);
         return;
     }

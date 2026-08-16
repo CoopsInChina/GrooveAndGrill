@@ -4,22 +4,26 @@
 #include "globals.h"
 #include "wifi_manager.h"
 #include "sonos_controller.h"
+#include "bbq_controller.h"
 #include "lvgl.h"
+#include "esp_system.h"
 #include <stdio.h>
 #include <string.h>
 
-// Settings carousel: About | WiFi | Speaker Setup | OTA | Screensaver (stub)
+// Settings carousel: WiFi | Speaker | BBQ Source | OTA | Screensaver | About
 // Swipe left = next page, swipe right = prev page (or back to menu from About)
 
-#define PAGE_COUNT  5
+#define PAGE_COUNT  6
 #define PAGE_WIFI           0
 #define PAGE_SPEAKER_SETUP  1
-#define PAGE_OTA            2
-#define PAGE_SCREENSAVER    3
-#define PAGE_ABOUT          4
+#define PAGE_BBQ_SOURCE     2
+#define PAGE_OTA            3
+#define PAGE_SCREENSAVER    4
+#define PAGE_ABOUT          5
 
 static lv_obj_t *s_scr    = NULL;
 static int        s_page  = 0;
+static bool       s_gesture_fired = false;
 
 // Screensaver page — updated by slider callbacks
 static lv_obj_t *s_dim_val_lbl = NULL;
@@ -57,8 +61,21 @@ static void go_prev(void)
     else            show_page(PAGE_COUNT - 1);
 }
 
+// A horizontal swipe over a button fires CLICKED too (same touch); the flag
+// suppresses that stray click. But swiping is how you move BETWEEN pages on
+// this screen (it doesn't navigate away), so without an expiry the flag sat
+// there until whatever click happened next — often a later, genuinely
+// separate tap on the page you just swiped to, which then silently ate the
+// user's first real press (reported as "needs pressing twice"). Auto-clear
+// shortly after: long enough to catch the same-touch phantom click, short
+// enough that a deliberate tap afterwards always goes through.
+static void gesture_clear_cb(lv_timer_t *t) { (void)t; s_gesture_fired = false; }
+
 static void gesture_cb(lv_event_t *e)
 {
+    s_gesture_fired = true;
+    lv_timer_t *t = lv_timer_create(gesture_clear_cb, 400, NULL);
+    lv_timer_set_repeat_count(t, 1);
     ui_handle_gesture(go_next, go_prev, NULL, NULL);
 }
 
@@ -191,6 +208,97 @@ static void build_ota_page(lv_obj_t *p)
     lv_obj_align(info, LV_ALIGN_CENTER, 0, 20);
 }
 
+// ---- BBQ source page (BBQ Box observer  vs  direct wireless probe) ------
+// Changing source brings up a different BLE stack, so we persist + reboot.
+
+static void reboot_timer_cb(lv_timer_t *t) { (void)t; esp_restart(); }
+
+static void source_btn_cb(lv_event_t *e)
+{
+    if (s_gesture_fired) { s_gesture_fired = false; return; }  // ignore swipe-clicks
+    bbq_source_t chosen = (bbq_source_t)(intptr_t)lv_event_get_user_data(e);
+    if (chosen == bbq_source_get()) return;                    // already selected
+
+    bbq_source_set(chosen);   // persisted; picked up on next boot
+
+    // Cover the screen with a notice, then reboot so main.c starts the matching
+    // BLE stack (observer vs central).
+    lv_obj_t *ov = lv_label_create(s_scr);
+    lv_label_set_text(ov, "Switching source…\nRebooting");
+    lv_obj_set_style_text_align(ov, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(ov, COL_TEXT, 0);
+    lv_obj_set_style_text_font(ov, &lv_font_montserrat_20, 0);
+    lv_obj_center(ov);
+
+    lv_timer_t *t = lv_timer_create(reboot_timer_cb, 600, NULL);
+    lv_timer_set_repeat_count(t, 1);
+}
+
+static void clear_setup_btn_cb(lv_event_t *e)
+{
+    if (s_gesture_fired) { s_gesture_fired = false; return; }
+    bbq_clear_all();
+    lv_obj_t *lbl = lv_obj_get_child(lv_event_get_target(e), 0);
+    if (lbl) lv_label_set_text(lbl, "Cleared");
+}
+
+static void make_source_btn(lv_obj_t *p, const char *text, bool active, int cy,
+                            bbq_source_t val)
+{
+    lv_obj_t *btn = lv_btn_create(p);
+    lv_obj_set_size(btn, 230, 52);
+    lv_obj_align(btn, LV_ALIGN_CENTER, 0, cy);
+    lv_obj_set_style_radius(btn, 26, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    if (active) {
+        lv_obj_set_style_bg_color(btn, COL_ACCENT, 0);
+        lv_obj_set_style_border_width(btn, 0, 0);
+    } else {
+        lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_color(btn, COL_TEXT_DIM, 0);
+        lv_obj_set_style_border_width(btn, 2, 0);
+    }
+    lv_obj_add_event_cb(btn, source_btn_cb, LV_EVENT_CLICKED, (void *)(intptr_t)val);
+
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_color(lbl, active ? COL_BG : COL_TEXT, 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
+    lv_obj_center(lbl);
+}
+
+static void build_bbq_source_page(lv_obj_t *p)
+{
+    bbq_source_t cur = bbq_source_get();
+
+    lv_obj_t *hint = lv_label_create(p);
+    lv_label_set_text(hint, "Read temperatures from");
+    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(hint, COL_TEXT_DIM, 0);
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_16, 0);
+    lv_obj_align(hint, LV_ALIGN_CENTER, 0, -50);
+
+    make_source_btn(p, "BBQ Box",        cur == BBQ_SRC_BOX,   10, BBQ_SRC_BOX);
+    make_source_btn(p, "Wireless Probe", cur == BBQ_SRC_PROBE, 75, BBQ_SRC_PROBE);
+
+    // Clear-all: wipe leftover allocations to get a clean "Add Meat only" state.
+    lv_obj_t *clr = lv_btn_create(p);
+    lv_obj_set_size(clr, 200, 40);
+    lv_obj_align(clr, LV_ALIGN_CENTER, 0, 140);
+    lv_obj_set_style_radius(clr, 20, 0);
+    lv_obj_set_style_bg_opa(clr, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(clr, COL_WARN, 0);
+    lv_obj_set_style_border_width(clr, 1, 0);
+    lv_obj_set_style_shadow_width(clr, 0, 0);
+    lv_obj_add_event_cb(clr, clear_setup_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *cl = lv_label_create(clr);
+    lv_label_set_text(cl, "Clear cook setup");
+    lv_obj_set_style_text_color(cl, COL_WARN, 0);
+    lv_obj_set_style_text_font(cl, &lv_font_montserrat_16, 0);
+    lv_obj_center(cl);
+}
+
 // ---- Screensaver page callbacks ----------------------------------------
 
 static void dim_switch_cb(lv_event_t *e)
@@ -321,18 +429,20 @@ lv_obj_t *ui_settings_create(void)
 
     // Order matches the PAGE_* indices above (About moved to the end).
     static const char *titles[PAGE_COUNT] = {
-        "WiFi", "Speaker", "OTA Update", "Screensaver", "About"
+        "WiFi", "Speaker", "BBQ Source", "OTA Update", "Screensaver", "About"
     };
 
     s_pages[PAGE_ABOUT]         = make_page(s_scr, titles[PAGE_ABOUT]);
     s_pages[PAGE_WIFI]          = make_page(s_scr, titles[PAGE_WIFI]);
     s_pages[PAGE_SPEAKER_SETUP] = make_page(s_scr, titles[PAGE_SPEAKER_SETUP]);
+    s_pages[PAGE_BBQ_SOURCE]    = make_page(s_scr, titles[PAGE_BBQ_SOURCE]);
     s_pages[PAGE_OTA]           = make_page(s_scr, titles[PAGE_OTA]);
     s_pages[PAGE_SCREENSAVER]   = make_page(s_scr, titles[PAGE_SCREENSAVER]);
 
     build_about_page(s_pages[PAGE_ABOUT]);
     build_wifi_page(s_pages[PAGE_WIFI]);
     build_speaker_page(s_pages[PAGE_SPEAKER_SETUP]);
+    build_bbq_source_page(s_pages[PAGE_BBQ_SOURCE]);
     build_ota_page(s_pages[PAGE_OTA]);
     build_screensaver_page(s_pages[PAGE_SCREENSAVER]);
 

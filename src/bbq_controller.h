@@ -46,7 +46,10 @@ typedef struct {
     sensor_src_t  src;
     uint8_t       hw_id;        // TC channel 0..3, or probe id byte
     bool          present;      // reporting within the freshness window
-    float         temp_c;       // latest reading (valid when present)
+    float         temp_c;       // latest reading (last-known while alarming)
+    // True if this sensor was live at some point since boot and has since
+    // stopped reporting — a lost-connection alarm, not just "never set up".
+    bool          alarm;
     // ---- allocation (persisted) ----
     uint8_t       grill_num;    // 1..MAX_GRILLS, 0 = unassigned
     sensor_role_t role;
@@ -55,6 +58,33 @@ typedef struct {
 } bbq_sensor_t;
 
 void bbq_controller_init(void);
+
+// ---- BLE source mode -------------------------------------------------------
+// Where the display gets its temperatures. BOX (default): passive observer of
+// the ESP-BLE-BBQ-Box advertisement. PROBE: connect directly to a single
+// wireless BBQ probe (no box). Persisted to NVS; the choice is read once at
+// boot to bring up the matching BLE stack, so bbq_source_set() reboots.
+typedef enum {
+    BBQ_SRC_BOX = 0,     // observer of the BBQ Box gateway
+    BBQ_SRC_PROBE,       // direct central to one wireless probe
+} bbq_source_t;
+
+bbq_source_t bbq_source_get(void);
+void         bbq_source_set(bbq_source_t src);   // persists to NVS (caller reboots)
+
+// ---- Direct-probe slot identity (probe mode only) --------------------------
+// A wireless probe's BLE address (hw_id) is technically stable, but with two
+// probes it's easy to lose track of "which one is which" across a session —
+// the first one you ever see stays "slot 1" (etc.) until its allocation is
+// removed, rather than the UI position shuffling by current connection order.
+// Assigned the first time a probe is seen connected or found already
+// allocated; freed by bbq_sensor_unassign(). Persists to NVS.
+int  bbq_probe_slot_of(uint8_t hw_id);              // 0-based slot, or -1 if unknown
+bool bbq_probe_slot_get(int slot, uint8_t *hw_id_out); // true + hw_id if `slot` is bonded
+
+// True when the active BLE link is up: the box is being heard (BOX mode) or the
+// wireless probe is connected (PROBE mode). Drives the on-screen BT indicator.
+bool bbq_link_up(void);
 
 // ---- Sensor pool -----------------------------------------------------------
 // Count of sensors currently known: every wired channel that is present, plus
@@ -69,6 +99,10 @@ void bbq_sensor_assign(sensor_src_t src, uint8_t hw_id, uint8_t grill_num,
                        sensor_role_t role, meat_kind_t kind, int target_c);
 void bbq_sensor_unassign(sensor_src_t src, uint8_t hw_id);
 
+// Wipe every allocation (clears NVS) — a clean slate. The BBQ screen falls back
+// to just the "Add Meat" slot.
+void bbq_clear_all(void);
+
 // ---- Derived cook views ----------------------------------------------------
 // The gauge screens page through these: one view per allocated MEAT sensor
 // (carrying its grill's shared ambient), plus one ambient-only view per grill
@@ -79,7 +113,8 @@ typedef struct {
     // grill ambient (shared by every meat on this grill):
     bool          grill_assigned;
     bool          grill_present;
-    float         grill_temp_c;
+    bool          grill_alarm;    // was live, now not reporting
+    float         grill_temp_c;   // last-known while alarming
     int           grill_target_c;
     sensor_src_t  grill_src;      // ambient sensor identity (when grill_assigned)
     uint8_t       grill_hw_id;
@@ -89,12 +124,23 @@ typedef struct {
     uint8_t       meat_hw_id;
     meat_kind_t   meat_kind;
     bool          meat_present;
-    float         meat_temp_c;
+    bool          meat_alarm;     // was live, now not reporting
+    float         meat_temp_c;    // last-known while alarming
     int           meat_target_c;
 } bbq_view_t;
 
 int  bbq_view_count(void);
 bool bbq_view_at(int i, bbq_view_t *out);
+
+// Index of the view containing this sensor (as its meat, or as the ambient of
+// a meat-less grill), or -1 if it has no view (e.g. a grill-temp sensor whose
+// grill also has a meat — the ambient shows on the meat's view instead).
+int  bbq_view_index_for(sensor_src_t src, uint8_t hw_id);
+
+// False only in probe mode once every direct-probe slot is both bonded to a
+// physical probe AND allocated to a meat — there is nothing left to add until
+// one is removed. Always true in box mode.
+bool bbq_can_add_more(void);
 
 // meat_kind → index into MEAT_TYPES (meat_temps.h), or -1 for none/chicken.
 int  bbq_meat_type_idx(meat_kind_t k);

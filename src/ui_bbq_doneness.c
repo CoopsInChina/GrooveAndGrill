@@ -1,5 +1,6 @@
 #include "ui_bbq_doneness.h"
 #include "ui_common.h"
+#include "ui_bbq.h"
 #include "bbq_controller.h"
 #include "meat_temps.h"
 #include "lvgl.h"
@@ -47,9 +48,11 @@ static void confirm_btn_cb(lv_event_t *e)
 
     // Assign the pending meat sensor (see bbq_setup, set by the wizard / ⚙).
     bbq_setup_t setup;
-    if (bbq_setup_get(&setup))
+    if (bbq_setup_get(&setup)) {
         bbq_sensor_assign(setup.src, setup.hw_id, setup.grill_num, ROLE_MEAT,
                           s_meat_kind, mt->levels[idx].target_c);
+        ui_bbq_set_index(bbq_view_index_for(setup.src, setup.hw_id));
+    }
     ui_navigate_to(SCREEN_BBQ);
 }
 

@@ -1,5 +1,7 @@
 #include "bbq_controller.h"
 #include "bbq_ble.h"
+#include "ble_probe.h"
+#include "buzzer.h"
 #include "app_config.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -21,6 +23,10 @@ typedef struct {
     sensor_role_t role;
     meat_kind_t   meat_kind;
     int16_t       target_c;
+    // ---- session-only alarm tracking (NOT persisted — resets on reboot,
+    // matching "lost connection since boot", not "never connected") ----
+    bool          ever_present;
+    float         last_temp_c;
 } alloc_t;
 
 static alloc_t          s_alloc[MAX_BBQ_SENSORS];
@@ -34,6 +40,9 @@ static esp_timer_handle_t s_poll_timer;
 
 // Legacy shim: the old UI always shows >=1 grill and can "add" up to MAX_GRILLS.
 static int              s_legacy_grills = 1;
+
+// BLE source mode, loaded once at init (see bbq_source_get/set).
+static bbq_source_t     s_source = BBQ_SRC_BOX;
 
 // ---- NVS persistence -------------------------------------------------------
 // Blob layout: [ver=1][count] then count × {src,hw_id,grill,role,kind,tgt_lo,tgt_hi}
@@ -96,6 +105,143 @@ static void alloc_load(void)
     ESP_LOGI(TAG, "loaded %d sensor allocation(s)", slot);
 }
 
+// ---- Direct-probe slot identity (see header) --------------------------------
+typedef struct { bool used; uint8_t hw_id; } probe_slot_t;
+static probe_slot_t s_probe_slots[MAX_DIRECT_PROBES];
+
+#define PSLOT_BLOB_VER 1
+
+static void probe_slots_save(void)
+{
+    uint8_t blob[1 + MAX_DIRECT_PROBES * 2];
+    blob[0] = PSLOT_BLOB_VER;
+    for (int i = 0; i < MAX_DIRECT_PROBES; i++) {
+        blob[1 + i * 2]     = s_probe_slots[i].used ? 1 : 0;
+        blob[1 + i * 2 + 1] = s_probe_slots[i].hw_id;
+    }
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) return;
+    nvs_set_blob(nvs, NVS_KEY_BBQ_PSLOTS, blob, sizeof(blob));
+    nvs_commit(nvs);
+    nvs_close(nvs);
+}
+
+static void probe_slots_load(void)
+{
+    memset(s_probe_slots, 0, sizeof(s_probe_slots));
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) return;
+    uint8_t blob[1 + MAX_DIRECT_PROBES * 2];
+    size_t len = sizeof(blob);
+    esp_err_t err = nvs_get_blob(nvs, NVS_KEY_BBQ_PSLOTS, blob, &len);
+    nvs_close(nvs);
+    if (err != ESP_OK || len < 1 || blob[0] != PSLOT_BLOB_VER) return;
+    for (int i = 0; i < MAX_DIRECT_PROBES && (size_t)(1 + i * 2 + 1) < len; i++) {
+        s_probe_slots[i].used  = blob[1 + i * 2] != 0;
+        s_probe_slots[i].hw_id = blob[1 + i * 2 + 1];
+    }
+}
+
+// Lock-free — only called from within poll_cb, which already holds s_lock.
+static void probe_slot_touch(uint8_t hw_id)
+{
+    for (int i = 0; i < MAX_DIRECT_PROBES; i++)
+        if (s_probe_slots[i].used && s_probe_slots[i].hw_id == hw_id) return;
+    for (int i = 0; i < MAX_DIRECT_PROBES; i++) {
+        if (!s_probe_slots[i].used) {
+            s_probe_slots[i].used  = true;
+            s_probe_slots[i].hw_id = hw_id;
+            probe_slots_save();
+            ESP_LOGI(TAG, "probe id=0x%02x bonded to slot %d", hw_id, i + 1);
+            return;
+        }
+    }
+    // All slots taken by other probes — nothing to do (capped at MAX_DIRECT_PROBES).
+}
+
+static void probe_slot_release(uint8_t hw_id)
+{
+    if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) return;
+    for (int i = 0; i < MAX_DIRECT_PROBES; i++) {
+        if (s_probe_slots[i].used && s_probe_slots[i].hw_id == hw_id) {
+            s_probe_slots[i].used  = false;
+            s_probe_slots[i].hw_id = 0;
+            xSemaphoreGive(s_lock);
+            probe_slots_save();
+            ESP_LOGI(TAG, "probe id=0x%02x released from slot %d", hw_id, i + 1);
+            return;
+        }
+    }
+    xSemaphoreGive(s_lock);
+}
+
+int bbq_probe_slot_of(uint8_t hw_id)
+{
+    int slot = -1;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+        for (int i = 0; i < MAX_DIRECT_PROBES; i++)
+            if (s_probe_slots[i].used && s_probe_slots[i].hw_id == hw_id) { slot = i; break; }
+        xSemaphoreGive(s_lock);
+    }
+    return slot;
+}
+
+bool bbq_probe_slot_get(int slot, uint8_t *hw_id_out)
+{
+    if (slot < 0 || slot >= MAX_DIRECT_PROBES) return false;
+    bool ok = false;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+        if (s_probe_slots[slot].used) {
+            if (hw_id_out) *hw_id_out = s_probe_slots[slot].hw_id;
+            ok = true;
+        }
+        xSemaphoreGive(s_lock);
+    }
+    return ok;
+}
+
+// ---- BLE source mode -------------------------------------------------------
+static void source_load(void)
+{
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) return;
+    uint8_t v = BBQ_SRC_BOX;
+    if (nvs_get_u8(nvs, NVS_KEY_BBQ_SOURCE, &v) == ESP_OK)
+        s_source = (v == BBQ_SRC_PROBE) ? BBQ_SRC_PROBE : BBQ_SRC_BOX;
+    nvs_close(nvs);
+}
+
+bbq_source_t bbq_source_get(void) { return s_source; }
+
+static void poll_cb(void *arg);   // rebuild the live pool (defined below)
+
+bool bbq_link_up(void)
+{
+    return (s_source == BBQ_SRC_PROBE) ? ble_probe_any() : bbq_ble_present();
+}
+
+void bbq_clear_all(void)
+{
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) return;
+    memset(s_alloc, 0, sizeof(s_alloc));
+    memset(s_probe_slots, 0, sizeof(s_probe_slots));
+    xSemaphoreGive(s_lock);
+    alloc_save();
+    probe_slots_save();
+    poll_cb(NULL);     // rebuild the live pool immediately (→ no views)
+    ESP_LOGI(TAG, "cleared all sensor allocations");
+}
+
+void bbq_source_set(bbq_source_t src)
+{
+    s_source = src;
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) return;
+    nvs_set_u8(nvs, NVS_KEY_BBQ_SOURCE, (uint8_t)src);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+}
+
 static alloc_t *alloc_find(sensor_src_t src, uint8_t hw_id)
 {
     for (int i = 0; i < MAX_BBQ_SENSORS; i++)
@@ -144,6 +290,16 @@ static void add_sensor(sensor_src_t src, uint8_t hw_id, bool present, float temp
         s->role      = a->role;
         s->meat_kind = a->meat_kind;
         s->target_c  = a->target_c;
+
+        if (present) {
+            a->ever_present = true;
+            a->last_temp_c  = temp;
+        } else if (a->ever_present) {
+            // Was live at some point this session, now silent: alarm, and
+            // keep showing the last reading rather than reverting to "- C".
+            s->alarm  = true;
+            s->temp_c = a->last_temp_c;
+        }
     }
 }
 
@@ -154,37 +310,65 @@ static void poll_cb(void *arg)
 
     s_sensor_count = 0;
 
-    // 1) Wired thermocouples: always surface all 4 fixed channels (present per
-    //    the box advert, else shown "not connected") so they can be allocated
-    //    up front, before the box is even powered.
-    for (int ch = 0; ch < BBQ_TC_COUNT; ch++) {
-        float t = 0;
-        bool ok = bbq_ble_channel(ch, &t);
-        add_sensor(SRC_TC, (uint8_t)ch, ok, t);
-    }
-
-    // 2) Wireless probes currently reported by the box hub.
-    int pc = bbq_ble_probe_count();
-    for (int i = 0; i < pc; i++) {
-        uint8_t id = 0; float t = 0;
-        if (!bbq_ble_probe(i, &id, &t)) continue;
-        add_sensor(SRC_PROBE, id, !isnan(t), isnan(t) ? 0.0f : t);
+    if (s_source == BBQ_SRC_PROBE) {
+        // Direct wireless-probe mode (no box): up to MAX_DIRECT_PROBES probes
+        // we connect to over GATT, each keyed by its address byte. No
+        // thermocouples exist in this mode.
+        int n = ble_probe_count();
+        for (int i = 0; i < n; i++) {
+            uint8_t id = 0; float t = 0;
+            if (ble_probe_at(i, &id, &t)) {
+                probe_slot_touch(id);   // first time seen -> bonds a stable UI slot
+                add_sensor(SRC_PROBE, id, true, t);
+            }
+        }
+    } else {
+        // Box mode: surface all 4 fixed thermocouple channels (present per the
+        // box advert, else "not connected") so they can be allocated up front,
+        // plus any wireless probes the box hub is currently forwarding.
+        for (int ch = 0; ch < BBQ_TC_COUNT; ch++) {
+            float t = 0;
+            bool ok = bbq_ble_channel(ch, &t);
+            add_sensor(SRC_TC, (uint8_t)ch, ok, t);
+        }
+        int pc = bbq_ble_probe_count();
+        for (int i = 0; i < pc; i++) {
+            uint8_t id = 0; float t = 0;
+            if (!bbq_ble_probe(i, &id, &t)) continue;
+            add_sensor(SRC_PROBE, id, !isnan(t), isnan(t) ? 0.0f : t);
+        }
     }
 
     // 3) Allocated-but-absent sensors (e.g. a configured probe that dropped)
-    //    so they stay visible/configurable.
+    //    so they stay visible/configurable — but only those valid for the
+    //    active source. In direct-probe mode there are no thermocouples, so a
+    //    leftover TC allocation (e.g. from box-mode setup) must not conjure a
+    //    grill view; in box mode a stray direct-probe id likewise doesn't apply.
     for (int i = 0; i < MAX_BBQ_SENSORS; i++) {
-        if (s_alloc[i].used && s_alloc[i].role != ROLE_UNASSIGNED)
-            add_sensor(s_alloc[i].src, s_alloc[i].hw_id, false, 0.0f);
+        if (!s_alloc[i].used || s_alloc[i].role == ROLE_UNASSIGNED) continue;
+        if (s_source == BBQ_SRC_PROBE && s_alloc[i].src == SRC_TC) continue;
+        // Backfill: an allocation from before this boot (or before the slot
+        // table existed) still needs a bonded slot.
+        if (s_source == BBQ_SRC_PROBE && s_alloc[i].src == SRC_PROBE)
+            probe_slot_touch(s_alloc[i].hw_id);
+        add_sensor(s_alloc[i].src, s_alloc[i].hw_id, false, 0.0f);
     }
 
+    bool any_alarm = false;
+    for (int i = 0; i < s_sensor_count; i++)
+        if (s_sensors[i].alarm) { any_alarm = true; break; }
+
     xSemaphoreGive(s_lock);
+
+    buzzer_set_alarm(any_alarm);   // outside the lock — keeps I2C off the critical section
 }
 
 void bbq_controller_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
     alloc_load();
+    source_load();
+    probe_slots_load();
     poll_cb(NULL);   // seed the pool immediately
 
     const esp_timer_create_args_t targs = { .callback = poll_cb, .name = "bbq_poll" };
@@ -250,6 +434,9 @@ void bbq_sensor_assign(sensor_src_t src, uint8_t hw_id, uint8_t grill_num,
 void bbq_sensor_unassign(sensor_src_t src, uint8_t hw_id)
 {
     bbq_sensor_assign(src, hw_id, 0, ROLE_UNASSIGNED, MEAT_KIND_NONE, 0);
+    // Free its bonded UI slot too, so a different probe can claim that
+    // position — "bonded until removed" per the explicit remove action.
+    if (src == SRC_PROBE) probe_slot_release(hw_id);
 }
 
 // ---- Derived cook views ----------------------------------------------------
@@ -282,6 +469,7 @@ static void fill_grill_ambient(bbq_view_t *v, uint8_t g)
         if (s_sensors[i].grill_num == g && s_sensors[i].role == ROLE_GRILL) {
             v->grill_assigned = true;
             v->grill_present  = s_sensors[i].present;
+            v->grill_alarm    = s_sensors[i].alarm;
             v->grill_temp_c   = s_sensors[i].temp_c;
             v->grill_target_c = s_sensors[i].target_c;
             v->grill_src      = s_sensors[i].src;
@@ -326,6 +514,52 @@ bool bbq_setup_get(bbq_setup_t *out)
     return true;
 }
 
+int bbq_view_index_for(sensor_src_t src, uint8_t hw_id)
+{
+    int idx = -1;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) return -1;
+
+    int seen = 0;
+    for (int i = 0; i < s_sensor_count; i++) {
+        if (s_sensors[i].role != ROLE_MEAT || !s_sensors[i].grill_num) continue;
+        if (s_sensors[i].src == src && s_sensors[i].hw_id == hw_id) { idx = seen; break; }
+        seen++;
+    }
+    if (idx < 0) {
+        for (int g = 1; g <= MAX_GRILLS && idx < 0; g++) {
+            bool has_grill = false, has_meat = false;
+            sensor_src_t gsrc = SRC_TC; uint8_t ghw = 0;
+            for (int i = 0; i < s_sensor_count; i++) {
+                if (s_sensors[i].grill_num != g) continue;
+                if (s_sensors[i].role == ROLE_GRILL) { has_grill = true; gsrc = s_sensors[i].src; ghw = s_sensors[i].hw_id; }
+                if (s_sensors[i].role == ROLE_MEAT)  has_meat = true;
+            }
+            if (!has_grill || has_meat) continue;
+            if (gsrc == src && ghw == hw_id) idx = seen;
+            seen++;
+        }
+    }
+
+    xSemaphoreGive(s_lock);
+    return idx;
+}
+
+bool bbq_can_add_more(void)
+{
+    if (s_source != BBQ_SRC_PROBE) return true;   // box mode: unrestricted here
+
+    bool can = false;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+        for (int i = 0; i < MAX_DIRECT_PROBES; i++) {
+            if (!s_probe_slots[i].used) { can = true; break; }   // room for a new identity
+            alloc_t *a = alloc_find(SRC_PROBE, s_probe_slots[i].hw_id);
+            if (!a || !a->used || a->role == ROLE_UNASSIGNED) { can = true; break; } // bonded but not yet a meat
+        }
+        xSemaphoreGive(s_lock);
+    }
+    return can;
+}
+
 bool bbq_view_at(int idx, bbq_view_t *out)
 {
     if (!out || idx < 0) return false;
@@ -345,6 +579,7 @@ bool bbq_view_at(int idx, bbq_view_t *out)
         out->meat_hw_id    = s_sensors[i].hw_id;
         out->meat_kind     = s_sensors[i].meat_kind;
         out->meat_present  = s_sensors[i].present;
+        out->meat_alarm    = s_sensors[i].alarm;
         out->meat_temp_c   = s_sensors[i].temp_c;
         out->meat_target_c = s_sensors[i].target_c;
         ok = true;

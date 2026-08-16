@@ -1,4 +1,5 @@
 #include "tca9554.h"
+#include "buzzer.h"
 #include "display.h"
 #include "cst820.h"
 #include "globals.h"
@@ -6,6 +7,7 @@
 #include "sonos_controller.h"
 #include "bbq_controller.h"
 #include "bbq_ble.h"
+#include "ble_probe.h"
 #include "weather.h"
 #include "ui_common.h"
 #include "ui_boot.h"
@@ -69,6 +71,7 @@ void app_main(void)
 
     // I2C expander — must come before display_init
     ESP_ERROR_CHECK(tca9554_init());
+    buzzer_init();   // onboard buzzer via the expander (pin 8) — needs I2C up
 
     // Display + LVGL task — runs while WiFi connects in background
     ESP_ERROR_CHECK(display_init());
@@ -187,7 +190,13 @@ void app_main(void)
     // DRAM at init. Spawning the Sonos/art/weather tasks beforehand fragments
     // DRAM enough that esp_bt_controller_init() fails with "Malloc failed".
     // WiFi is already up, so coexistence is handled from here on.
-    bbq_ble_init();   // passive BLE scan for the BBQ Box gateway (after WiFi)
+    // One NimBLE stack, chosen by the saved source mode: observe the BBQ Box,
+    // or connect directly to a single wireless probe. Switching modes reboots
+    // (see bbq_source_set), so this runs once per boot.
+    if (bbq_source_get() == BBQ_SRC_PROBE)
+        ble_probe_init();   // GATT central to one wireless probe
+    else
+        bbq_ble_init();     // passive observer of the BBQ Box gateway
 
     ui_art_init();
     weather_init();
