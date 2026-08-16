@@ -6,6 +6,7 @@
 #include "sonos_controller.h"
 #include "bbq_controller.h"
 #include "ui_reboot.h"
+#include "ota_update.h"
 #include "lvgl.h"
 #include <stdio.h>
 #include <string.h>
@@ -197,15 +198,116 @@ static void build_speaker_page(lv_obj_t *p)
     lv_obj_center(lbl);
 }
 
+// ---- OTA page ------------------------------------------------------
+// Manual only: Check for Update -> (if newer) Update Now -> progress ->
+// hands off to the shared reboot-countdown screen. Only released builds
+// (pushed to the `release` branch) are ever offered — see README.
+
+static lv_obj_t   *s_ota_info_lbl = NULL;
+static lv_obj_t   *s_ota_btn      = NULL;
+static lv_obj_t   *s_ota_btn_lbl  = NULL;
+static lv_timer_t *s_ota_timer    = NULL;
+static bool        s_ota_can_update = false;
+
+static void ota_btn_cb(lv_event_t *e)
+{
+    if (s_gesture_fired) { s_gesture_fired = false; return; }
+    if (s_ota_can_update) ota_start_async();
+    else                  ota_check_async();
+}
+
+static void ota_poll_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_scr || lv_scr_act() != s_scr || s_page != PAGE_OTA) return;
+
+    ota_status_t st;
+    ota_get_status(&st);
+
+    if (st.state == OTA_DONE_OK) {
+        ui_reboot_begin("Firmware Updated");
+        ui_navigate_to(SCREEN_REBOOT);
+        return;
+    }
+
+    char buf[96];
+    const char *btn_text = "CHECK FOR UPDATE";
+    bool busy = false;
+    s_ota_can_update = false;
+
+    switch (st.state) {
+        case OTA_CHECKING:
+            snprintf(buf, sizeof(buf), "Current: v%s\n\nChecking\xE2\x80\xA6", FIRMWARE_VERSION);
+            btn_text = "CHECKING\xE2\x80\xA6"; busy = true;
+            break;
+        case OTA_UP_TO_DATE:
+            snprintf(buf, sizeof(buf), "Current: v%s\n\nUp to date", FIRMWARE_VERSION);
+            break;
+        case OTA_UPDATE_AVAILABLE:
+            snprintf(buf, sizeof(buf), "Current: v%s\n\nUpdate available: v%s",
+                     FIRMWARE_VERSION, st.latest_version);
+            btn_text = "UPDATE NOW"; s_ota_can_update = true;
+            break;
+        case OTA_CHECK_FAILED:
+            snprintf(buf, sizeof(buf), "Current: v%s\n\n%s", FIRMWARE_VERSION, st.error);
+            btn_text = "RETRY CHECK";
+            break;
+        case OTA_UPDATING:
+            if (st.image_size > 0)
+                snprintf(buf, sizeof(buf), "Updating\xE2\x80\xA6 %d%%\n\nDo not power off",
+                         (int)((int64_t)st.bytes_read * 100 / st.image_size));
+            else
+                snprintf(buf, sizeof(buf), "Updating\xE2\x80\xA6 %d KB\n\nDo not power off",
+                         st.bytes_read / 1024);
+            btn_text = "UPDATING\xE2\x80\xA6"; busy = true;
+            break;
+        case OTA_DONE_FAIL:
+            snprintf(buf, sizeof(buf), "Current: v%s\n\nUpdate failed: %s", FIRMWARE_VERSION, st.error);
+            btn_text = "RETRY";
+            break;
+        case OTA_IDLE:
+        default:
+            snprintf(buf, sizeof(buf), "Current: v%s", FIRMWARE_VERSION);
+            break;
+    }
+
+    if (s_ota_info_lbl) lv_label_set_text(s_ota_info_lbl, buf);
+    if (s_ota_btn_lbl)  lv_label_set_text(s_ota_btn_lbl, btn_text);
+    if (s_ota_btn) {
+        if (busy) lv_obj_add_state(s_ota_btn, LV_STATE_DISABLED);
+        else      lv_obj_clear_state(s_ota_btn, LV_STATE_DISABLED);
+    }
+}
+
 static void build_ota_page(lv_obj_t *p)
 {
-    lv_obj_t *info = lv_label_create(p);
-    lv_label_set_text(info, "OTA update\n\nComing soon");
-    lv_obj_set_style_text_color(info, COL_TEXT_DIM, 0);
-    lv_obj_set_style_text_font(info, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_align(info, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(info, 260);
-    lv_obj_align(info, LV_ALIGN_CENTER, 0, 20);
+    s_ota_info_lbl = lv_label_create(p);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "Current: v%s", FIRMWARE_VERSION);
+    lv_label_set_text(s_ota_info_lbl, buf);
+    lv_obj_set_style_text_color(s_ota_info_lbl, COL_TEXT, 0);
+    lv_obj_set_style_text_font(s_ota_info_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_align(s_ota_info_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(s_ota_info_lbl, 280);
+    lv_obj_align(s_ota_info_lbl, LV_ALIGN_CENTER, 0, -20);
+
+    s_ota_btn = lv_btn_create(p);
+    lv_obj_set_size(s_ota_btn, 200, 48);
+    lv_obj_align(s_ota_btn, LV_ALIGN_CENTER, 0, 60);
+    lv_obj_set_style_bg_color(s_ota_btn, COL_ACCENT, 0);
+    lv_obj_set_style_bg_color(s_ota_btn, COL_BUTTON, LV_STATE_DISABLED);
+    lv_obj_set_style_radius(s_ota_btn, 24, 0);
+    lv_obj_set_style_shadow_width(s_ota_btn, 0, 0);
+    lv_obj_set_style_border_width(s_ota_btn, 0, 0);
+    lv_obj_add_event_cb(s_ota_btn, ota_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    s_ota_btn_lbl = lv_label_create(s_ota_btn);
+    lv_label_set_text(s_ota_btn_lbl, "CHECK FOR UPDATE");
+    lv_obj_set_style_text_color(s_ota_btn_lbl, COL_BG, 0);
+    lv_obj_set_style_text_font(s_ota_btn_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_center(s_ota_btn_lbl);
+
+    if (!s_ota_timer) s_ota_timer = lv_timer_create(ota_poll_cb, 500, NULL);
 }
 
 // ---- BBQ source page (BBQ Box observer  vs  direct wireless probe) ------

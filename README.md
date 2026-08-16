@@ -15,6 +15,7 @@ via a companion **BBQ Box** gateway.
 ## Contents
 - [Hardware](#hardware)
 - [Software / build](#software--build)
+- [Releasing & installing](#releasing--installing)
 - [First-time setup](#first-time-setup)
 - [Using the device](#using-the-device)
 - [BBQ monitoring](#bbq-monitoring)
@@ -73,6 +74,40 @@ Generated sources (regenerate after editing their inputs):
 
 ---
 
+## Releasing & installing
+
+**Only builds pushed to the `release` branch are ever published.** Merging
+`dev` → `release` (or pushing directly) triggers
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds
+the firmware and publishes it to **GitHub Pages**:
+
+| What | Where |
+|---|---|
+| Browser-based USB flash (no software install — Chrome/Edge, Web Serial) | `https://coopsinchina.github.io/GrooveAndGrill/` |
+| Version the device checks against (Settings → OTA Update) | `.../version.json` |
+| The app image itself | `.../firmware.bin` |
+
+One-time repo setup: **Settings → Pages → Source → "GitHub Actions"**.
+
+**Bump the version** before releasing — it's the single source of truth read
+by both the firmware build and the release workflow:
+```ini
+# platformio.ini
+build_flags =
+    -DFIRMWARE_VERSION=\"0.2.0\"
+```
+
+**Installing:**
+- **First-time / bare board:** open the Pages URL above on Chrome/Edge, plug
+  in via USB-C, click Install. Flashes bootloader + partition table + app.
+- **Already running Groove & Grill:** **Settings → OTA Update** → *Check for
+  Update* → *Update Now*. Downloads `firmware.bin` into the inactive OTA slot
+  over Wi-Fi and reboots — no cable needed. If the new image crashes before
+  finishing boot, the bootloader automatically rolls back to the previous
+  slot (`CONFIG_APP_ROLLBACK_ENABLE`).
+
+---
+
 ## First-time setup
 
 1. **WiFi:** on boot, if no credentials are stored the device starts a setup
@@ -121,7 +156,11 @@ Artist is shown above the album art, track title below it.
 - Auto-returns to the music screen after ~10 s of inactivity.
 
 ### Settings (swipe left / right through pages)
-**WiFi · Speaker · OTA Update · Screensaver · About**
+**WiFi · Speaker · BBQ Source · OTA Update · Screensaver · About**
+
+OTA Update: shows the running version, *Check for Update* / *Update Now*
+(manual only — see [Releasing & installing](#releasing--installing)). A
+successful update hands off to a 5-second reboot countdown screen.
 
 ### Screensaver
 After a period of inactivity the display shows a **clock + weather** widget;
@@ -179,15 +218,21 @@ src/
   ui_bbq_config.c        sensor config (grill target / meat select, delete)
   ui_bbq_doneness.c      doneness selection
   ui_widgets.c           clock + weather screensaver
+  ui_reboot.*            shared "changing settings — rebooting in N" screen
   bbq_controller.*       sensor-centric BBQ model + NVS persistence
   bbq_ble.*              passive BLE observer of the BBQ Box advertisement
+  ble_probe.*            direct multi-probe BLE central (standalone mode)
+  ota_update.*           OTA check/download client (esp_https_ota)
   sonos_controller.c     Sonos discovery, polling, playback, favourites
   ui_art.c               album-art download / decode / cache
   cst820.c / tca9554.c   touch + IO-expander drivers
-  web_server.c           /setup (favourites & WiFi) + /bbq (sensor allocation)
+  buzzer.c               onboard buzzer (TCA9554 pin 8) — BBQ alarm
+  web_server.c           /setup — tabbed Music Setup / BBQ Setup page
   img_*.c                generated image assets
 data/meat_temps.json     meat doneness → target-temperature table (tracked)
 scripts/                 codegen for meat data + icons
+web/pages/index.html     GitHub Pages web-flash landing page (ESP Web Tools)
+.github/workflows/       release.yml — builds `release` pushes, publishes Pages
 partitions.csv           16 MB flash layout (dual OTA + 2 MB SPIFFS art cache)
 ```
 

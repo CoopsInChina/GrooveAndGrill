@@ -8,6 +8,7 @@
 #include "bbq_controller.h"
 #include "bbq_ble.h"
 #include "ble_probe.h"
+#include "ota_update.h"
 #include "weather.h"
 #include "ui_common.h"
 #include "ui_boot.h"
@@ -175,6 +176,10 @@ void app_main(void)
         ui_navigate_to(sonos_ok ? SCREEN_SONOS : SCREEN_MENU);
         display_unlock();
     }
+
+    // Confirmed the image boots and reaches the UI — cancel the OTA rollback
+    // timer so the bootloader keeps this slot (see CONFIG_APP_ROLLBACK_ENABLE).
+    ota_mark_app_valid();
 
     // ── NTP — start as soon as WiFi is up ─────────────────────────────
     if (wifi_ok) {

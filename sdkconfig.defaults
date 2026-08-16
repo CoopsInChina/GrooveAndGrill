@@ -6,6 +6,13 @@ CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
+# OTA safety net: if a newly-flashed image crashes/reboots before it calls
+# esp_ota_mark_app_valid_cancel_rollback() (see main.c, called once the menu
+# screen is up), the bootloader automatically reverts to the previous
+# working slot next boot instead of crash-looping on bad firmware.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_APP_ROLLBACK_ENABLE=y
+
 # PSRAM (OPI 8MB)
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y

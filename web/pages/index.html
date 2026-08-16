@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Groove &amp; Grill — Install</title>
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
+<style>
+  body{font-family:system-ui,sans-serif;background:#111;color:#eee;
+       max-width:520px;margin:0 auto;padding:32px 16px;text-align:center}
+  h1{color:#1db954;margin:0 0 4px}
+  h2{color:#aaa;font-size:.9rem;font-weight:normal;margin:0 0 28px}
+  .card{background:#1a1a1a;border-radius:12px;padding:24px;margin:16px 0}
+  .steps{text-align:left;color:#bbb;font-size:.9rem;line-height:1.6}
+  .steps li{margin-bottom:6px}
+  #version{color:#666;font-size:.8rem;margin-top:24px}
+  esp-web-install-button{--esp-tools-button-color:#1db954}
+  .browser-note{color:#888;font-size:.8rem;margin-top:14px}
+</style>
+</head>
+<body>
+  <h1>Groove &amp; Grill</h1>
+  <h2>Install firmware over USB — no software required</h2>
+
+  <div class="card">
+    <ol class="steps">
+      <li>Plug the display into this computer via USB-C.</li>
+      <li>Click the button below and pick the device's serial port.</li>
+      <li>Wait for the flash to finish, then the device reboots on its own.</li>
+    </ol>
+    <p style="margin-top:20px">
+      <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
+    </p>
+    <p class="browser-note">Needs Chrome or Edge (Web Serial support). Firefox and Safari aren't supported.</p>
+  </div>
+
+  <p>Already running Groove &amp; Grill? Use <b>Settings → OTA Update</b> on the
+     device instead — no cable needed.</p>
+
+  <p id="version">Loading current release version&hellip;</p>
+  <script>
+    fetch('version.json').then(r => r.json()).then(d => {
+      document.getElementById('version').textContent = 'Latest release: v' + d.version;
+    }).catch(() => {});
+  </script>
+</body>
+</html>

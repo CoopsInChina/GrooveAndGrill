@@ -21,5 +21,7 @@ idf_component_register(
         esp_lvgl_port
         json
         spiffs
+        app_update
+        esp_https_ota
 )
 

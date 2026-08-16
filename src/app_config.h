@@ -8,6 +8,13 @@
 #define FIRMWARE_VERSION        "0.1.0"
 #endif
 
+// ---- OTA ----
+// Published by .github/workflows/release.yml on every push to the `release`
+// branch (see README "Releasing"). GitHub Pages default project-site URL —
+// update if Pages is served from elsewhere.
+#define OTA_VERSION_URL   "https://coopsinchina.github.io/GrooveAndGrill/version.json"
+#define OTA_FIRMWARE_URL  "https://coopsinchina.github.io/GrooveAndGrill/firmware.bin"
+
 // ---- Display ----
 #define DISPLAY_WIDTH           480
 #define DISPLAY_HEIGHT          480

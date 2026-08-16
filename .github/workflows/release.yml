@@ -1,0 +1,92 @@
+name: Publish release
+
+# Only builds pushed to `release` are ever published — merge/promote to this
+# branch when you actually want a build available for web-flash or OTA.
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build firmware
+        run: pio run -e music_meat
+
+      - name: Read firmware version
+        id: version
+        run: |
+          VER=$(grep -oE 'FIRMWARE_VERSION=\\"[^\\"]+' platformio.ini | cut -d'"' -f2)
+          if [ -z "$VER" ]; then echo "Could not parse FIRMWARE_VERSION from platformio.ini"; exit 1; fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble Pages site
+        run: |
+          set -e
+          OUT=dist
+          BUILD=.pio/build/music_meat
+          VER="${{ steps.version.outputs.version }}"
+
+          mkdir -p "$OUT"
+          cp web/pages/index.html "$OUT/index.html"
+          cp "$BUILD/bootloader.bin" "$OUT/bootloader.bin"
+          cp "$BUILD/partitions.bin" "$OUT/partitions.bin"
+          cp "$BUILD/firmware.bin"   "$OUT/firmware.bin"
+
+          cat > "$OUT/manifest.json" <<EOF
+          {
+            "name": "Groove & Grill",
+            "version": "$VER",
+            "new_install_prompt_erase": true,
+            "builds": [
+              {
+                "chipFamily": "ESP32-S3",
+                "parts": [
+                  { "path": "bootloader.bin", "offset": 0 },
+                  { "path": "partitions.bin", "offset": 32768 },
+                  { "path": "firmware.bin", "offset": 131072 }
+                ]
+              }
+            ]
+          }
+          EOF
+
+          cat > "$OUT/version.json" <<EOF
+          {
+            "version": "$VER",
+            "file": "firmware.bin"
+          }
+          EOF
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
