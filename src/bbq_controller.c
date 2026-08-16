@@ -220,6 +220,17 @@ bool bbq_link_up(void)
     return (s_source == BBQ_SRC_PROBE) ? ble_probe_any() : bbq_ble_present();
 }
 
+void bbq_radio_pause_for_ota(bool pause)
+{
+    if (s_source == BBQ_SRC_PROBE) {
+        if (pause) ble_probe_scan_pause();
+        else       ble_probe_scan_resume();
+    } else {
+        if (pause) bbq_ble_scan_pause();
+        else       bbq_ble_scan_resume();
+    }
+}
+
 void bbq_clear_all(void)
 {
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) return;

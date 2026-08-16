@@ -237,8 +237,8 @@ static void ota_poll_cb(lv_timer_t *t)
 
     switch (st.state) {
         case OTA_CHECKING:
-            snprintf(buf, sizeof(buf), "Current: v%s\n\nChecking\xE2\x80\xA6", FIRMWARE_VERSION);
-            btn_text = "CHECKING\xE2\x80\xA6"; busy = true;
+            snprintf(buf, sizeof(buf), "Current: v%s\n\nChecking...", FIRMWARE_VERSION);
+            btn_text = "CHECKING..."; busy = true;
             break;
         case OTA_UP_TO_DATE:
             snprintf(buf, sizeof(buf), "Current: v%s\n\nUp to date", FIRMWARE_VERSION);
@@ -254,12 +254,12 @@ static void ota_poll_cb(lv_timer_t *t)
             break;
         case OTA_UPDATING:
             if (st.image_size > 0)
-                snprintf(buf, sizeof(buf), "Updating\xE2\x80\xA6 %d%%\n\nDo not power off",
+                snprintf(buf, sizeof(buf), "Updating... %d%%\n\nDo not power off",
                          (int)((int64_t)st.bytes_read * 100 / st.image_size));
             else
-                snprintf(buf, sizeof(buf), "Updating\xE2\x80\xA6 %d KB\n\nDo not power off",
+                snprintf(buf, sizeof(buf), "Updating... %d KB\n\nDo not power off",
                          st.bytes_read / 1024);
-            btn_text = "UPDATING\xE2\x80\xA6"; busy = true;
+            btn_text = "UPDATING..."; busy = true;
             break;
         case OTA_DONE_FAIL:
             snprintf(buf, sizeof(buf), "Current: v%s\n\nUpdate failed: %s", FIRMWARE_VERSION, st.error);

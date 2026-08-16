@@ -32,3 +32,9 @@ bool ble_probe_at(int i, uint8_t *id, float *temp_c);
 
 // True if at least one probe link is up (drives the on-screen BT indicator).
 bool ble_probe_any(void);
+
+// Temporarily stop/resume scanning for new probes — used to free the shared
+// radio for a WiFi-heavy operation (OTA download). Existing connections are
+// left alone. See bbq_controller.h's bbq_radio_pause_for_ota().
+void ble_probe_scan_pause(void);
+void ble_probe_scan_resume(void);

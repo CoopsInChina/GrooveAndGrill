@@ -51,6 +51,7 @@ typedef struct {
 
 static probe_t s_probes[MAX_DIRECT_PROBES];
 static bool    s_connecting;   // one connect attempt in flight at a time
+static bool    s_paused;       // scanning/reconnecting suspended (see scan_pause)
 static SemaphoreHandle_t s_mutex;
 
 static inline uint32_t ms_now(void) { return (uint32_t)(esp_timer_get_time() / 1000ULL); }
@@ -84,6 +85,7 @@ static bool addr_in_use(const uint8_t *a)
 
 static void start_scan(void)
 {
+    if (s_paused) return;                // suspended for e.g. an OTA download
     if (s_connecting) return;            // can't scan and connect at once
     if (free_slot() < 0) {               // every slot taken — nothing to find
         ESP_LOGI(TAG, "all %d probe slots in use", MAX_DIRECT_PROBES);
@@ -338,4 +340,26 @@ bool ble_probe_any(void)
         xSemaphoreGive(s_mutex);
     }
     return any;
+}
+
+// Give WiFi the radio to itself for the duration of an OTA download. Scanning
+// alone wasn't enough — established GATT connections keep arbitrating radio
+// time via the WiFi/BT coexistence scheduler even while idle, which measured
+// as ~3KB/s OTA throughput (a 2.7MB image would take ~15 minutes). So this
+// also drops any connected probes; they reconnect automatically (same bonded
+// slot/identity — see bbq_probe_slot_of) once scan_resume() runs, whether
+// that's after a successful OTA's reboot or a failed one's cleanup.
+void ble_probe_scan_pause(void)
+{
+    s_paused = true;
+    ble_gap_disc_cancel();
+    for (int i = 0; i < MAX_DIRECT_PROBES; i++)
+        if (s_probes[i].in_use)
+            ble_gap_terminate(s_probes[i].conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+}
+
+void ble_probe_scan_resume(void)
+{
+    s_paused = false;
+    if (!s_connecting) start_scan();
 }

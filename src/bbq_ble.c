@@ -194,3 +194,9 @@ bool bbq_ble_probe(int slot, uint8_t *id, float *temp_c)
     }
     return ok;
 }
+
+// Give WiFi the radio to itself for the duration of an OTA download — BLE
+// scanning is continuous-duty-cycle radio activity that otherwise throttles
+// WiFi throughput to a crawl (same physical radio on ESP32-S3).
+void bbq_ble_scan_pause(void)  { ble_gap_disc_cancel(); }
+void bbq_ble_scan_resume(void) { start_scan(); }
