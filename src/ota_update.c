@@ -48,20 +48,14 @@ static StaticTask_t                 s_check_tcb;
 // through the same bus/cache being disabled) — crashes with
 // "esp_task_stack_is_sane_cache_disabled()" otherwise.
 //
-// Static (not dynamic xTaskCreate): tried dynamic first to avoid a permanent
-// reservation, but it failed outright once the larger LWIP_TCP_WND_DEFAULT
-// (see sdkconfig.defaults) left too little contiguous internal heap at the
-// exact moment "Update Now" is tapped — confirmed by "xTaskCreate(update)
-// failed" in the field. A static buffer is reserved once at link time, so it
-// no longer competes for a live, possibly-fragmented heap right when it's
-// needed most. The 8KB permanent cost is paid for by NOT also cutting the
-// LVGL pool to compensate — our usage-% logs undercount the true worst case
-// (screens never visited in a given session don't show up), so that's not
-// a safe lever to guess at. Watch "DRAM free before tasks" after this
-// change; if Sonos's poll_task/cmd_task ever fail to spawn because of it,
-// that's the real, measured signal to revisit — not a guess.
-static StackType_t  s_update_stack[UPDATE_STACK_WORDS];
-static StaticTask_t s_update_tcb;
+// Dynamic (not static xTaskCreateStatic): a static buffer was tried to
+// dodge live heap fragmentation, but its permanent 8KB reservation — paid
+// on every boot whether or not OTA ever runs — was confirmed in the field
+// to starve Sonos's cmd_task ("cmd_task create FAILED — out of internal
+// DRAM") and even the display's own RGB panel bounce-buffer allocation on
+// a fresh flash. OTA runs rarely and can surface a clear "out of memory,
+// try again" error on failure; Sonos runs every boot and can't be the one
+// paying that tax. Back to dynamic.
 
 static SemaphoreHandle_t s_mutex;
 static ota_status_t      s_status;
@@ -386,13 +380,13 @@ static void update_task(void *arg)
 void ota_start_async(void)
 {
     ensure_mutex();
-    TaskHandle_t h = xTaskCreateStatic(update_task, "ota_update", UPDATE_STACK_WORDS,
-                                       NULL, 3, s_update_stack, &s_update_tcb);
-    if (!h) {
+    BaseType_t ok = xTaskCreate(update_task, "ota_update", UPDATE_STACK_WORDS,
+                                NULL, 3, NULL);
+    if (ok != pdPASS) {
         ota_status_t s = { .state = OTA_DONE_FAIL };
         snprintf(s.error, sizeof(s.error), "Out of memory — try again");
         set_status(&s);
-        ESP_LOGE(TAG, "xTaskCreateStatic(update) failed");
+        ESP_LOGE(TAG, "xTaskCreate(update) failed");
     }
 }
 
