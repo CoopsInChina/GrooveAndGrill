@@ -7,8 +7,13 @@ sdkconfig.music_meat
 # WiFi credentials — never commit this file
 src/wifi_config.h
 
-# Proprietary logo asset and its generated C conversion
-assets/
+# Proprietary logo asset and its generated C conversion — but README
+# screenshots/hardware photos are documentation, not proprietary art, so
+# that one subfolder is explicitly tracked. (Must be assets/* + negate the
+# subfolder, not assets/ + negate inside it — git won't descend into an
+# ignored directory to evaluate negations for its contents.)
+assets/*
+!assets/ReadmePictures
 src/logo_img.c
 src/logo_img.h
 
