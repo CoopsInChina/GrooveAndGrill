@@ -6,6 +6,8 @@
 #include "meat_temps.h"
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
+#include "esp_system.h"
 #include "esp_log.h"
 #include <stdio.h>
 #include <string.h>
@@ -163,11 +165,37 @@ static const char HTML_HEAD[] =
     "<!DOCTYPE html><html><head>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
     "<meta charset='utf-8'>"
-    "<title>Music &amp; Meat</title>"
+    "<title>Groove &amp; Grill</title>"
     "<style>"
     "body{font-family:system-ui,sans-serif;background:#111;color:#eee;"
          "max-width:520px;margin:0 auto;padding:16px 12px}"
-    "h1{color:#1db954;margin:0 0 4px}"
+    "h1{color:#1db954;margin:0 0 4px;text-align:center}"
+    /* Tab bar */
+    ".tabbar{display:flex;gap:8px;margin:16px 0}"
+    ".tabbar button{flex:1;background:#1a1a1a;color:#888;border:none;border-radius:8px;"
+        "padding:10px;font-size:.85rem;font-weight:600;cursor:pointer}"
+    ".tabbar button.active{background:#1e1e1e;color:#eee}"
+    /* BBQ tab (scoped so it can't bleed into the Music tab's styling) */
+    "#tab-bbq h2{color:#e87722;font-size:1.05em;text-align:center;margin-bottom:2px}"
+    "#tab-bbq #s{color:#888;text-align:center;margin-bottom:16px;font-size:.85em}"
+    "#tab-bbq .src-banner{background:#1a1a1a;border-radius:8px;padding:10px 14px;"
+        "margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;"
+        "font-size:.85rem;gap:10px}"
+    "#tab-bbq .src-banner b{color:#eee}"
+    "#tab-bbq .card{background:#1c1c1c;border-radius:10px;padding:12px 14px;margin:10px 0}"
+    "#tab-bbq .hdr{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}"
+    "#tab-bbq .name{font-weight:600}#tab-bbq .temp{font-size:1.3em;font-weight:700}"
+    "#tab-bbq .ok{color:#1ed760}#tab-bbq .bad{color:#ff5555}"
+    "#tab-bbq .ctl{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end}"
+    "#tab-bbq .ctl label{font-size:.72rem;color:#999;display:block;margin-bottom:2px}"
+    "#tab-bbq select,#tab-bbq input{background:#262626;border:1px solid #333;border-radius:6px;"
+        "color:#eee;padding:6px 8px;font-size:.9rem}"
+    "#tab-bbq .fld{min-width:0}#tab-bbq .fld select,#tab-bbq .fld input{width:100%;box-sizing:border-box}"
+    "#tab-bbq button{background:#e87722;color:#000;border:none;border-radius:6px;"
+        "padding:8px 14px;font-weight:600;margin-top:10px;cursor:pointer}"
+    "#tab-bbq button:disabled{background:#444;color:#888}"
+    "#tab-bbq .empty{color:#666;text-align:center;padding:24px 0}"
+    "#tab-bbq .hide{display:none}"
     "h2{color:#aaa;font-size:.85rem;font-weight:normal;margin:0 0 16px}"
     "h3{color:#888;font-size:.8rem;text-transform:uppercase;letter-spacing:.08em;"
          "margin:24px 0 8px;border-bottom:1px solid #333;padding-bottom:4px}"
@@ -220,40 +248,29 @@ static const char HTML_HEAD[] =
     "</style></head><body>";
 
 static const char HTML_TAIL[] =
-    "<p class='footer'>Music &amp; Meat &mdash; setup</p></body></html>";
+    "<p class='footer'>Groove &amp; Grill &mdash; setup</p></body></html>";
 
-// ---- GET /setup -----------------------------------------------------
+static const char *bbq_tab_content(void);   // defined below, used by setup_get_handler
+
+// ---- GET /setup — combined Music Setup / BBQ Setup tabs -------------
 
 static esp_err_t setup_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_sendstr_chunk(req, HTML_HEAD);
-    httpd_resp_sendstr_chunk(req, "<h1>Music &amp; Meat</h1><h2>Favourites &amp; Setup</h2>");
-
-    // --- Sonos built-in favourites ---
-    httpd_resp_sendstr_chunk(req, "<h3>Sonos Favourites</h3>");
-    int sonos_count = sonos_favourites_count() - sonos_device_fav_count();
-    if (sonos_count <= 0) {
-        httpd_resp_sendstr_chunk(req,
-            "<p class='empty'>No Sonos favourites loaded yet.<br>"
-            "Ensure the API server is running.</p>");
-    } else {
-        char buf[320];
-        for (int i = 0; i < sonos_count; i++) {
-            snprintf(buf, sizeof(buf),
-                "<div class='fav'>"
-                "<span class='fav-name'>%s</span>"
-                "<form method='POST' action='/play' style='margin:0'>"
-                "<input type='hidden' name='idx' value='%d'>"
-                "<button class='play-btn' type='submit'>&#9654;</button>"
-                "</form></div>",
-                sonos_favourite_name(i), i);
-            httpd_resp_sendstr_chunk(req, buf);
-        }
-    }
+    httpd_resp_sendstr_chunk(req,
+        "<h1>Groove &amp; Grill</h1>"
+        "<div class='tabbar'>"
+          "<button id='tabBtnMusic' class='active' onclick=\"showTab('music')\">Music Setup</button>"
+          "<button id='tabBtnBbq' onclick=\"showTab('bbq')\">BBQ Setup</button>"
+        "</div>"
+        "<div id='tab-music'>"
+        "<h2>Favourites &amp; Setup</h2>");
 
     // --- Device custom favourites ---
-    httpd_resp_sendstr_chunk(req, "<h3>Custom Favourites</h3>");
+    // (The built-in Sonos favourites list is intentionally not shown here —
+    // this page only manages the device's own custom favourites.)
+    httpd_resp_sendstr_chunk(req, "<h3>Favourites</h3>");
     int dev_count = sonos_device_fav_count();
     int base_idx  = sonos_favourites_count() - dev_count;
     if (dev_count == 0) {
@@ -431,6 +448,23 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
             "doAdd('/add_by_url',params,art,'btn-u');"
           "}"
         "}"
+        "</script>"
+        "</div>");   // close #tab-music
+
+    httpd_resp_sendstr_chunk(req, "<div id='tab-bbq' style='display:none'>");
+    httpd_resp_sendstr_chunk(req, bbq_tab_content());
+    httpd_resp_sendstr_chunk(req, "</div>");   // close #tab-bbq
+
+    httpd_resp_sendstr_chunk(req,
+        "<script>"
+        "function showTab(which){"
+          "document.getElementById('tab-music').style.display=which=='music'?'':'none';"
+          "document.getElementById('tab-bbq').style.display=which=='bbq'?'':'none';"
+          "document.getElementById('tabBtnMusic').classList.toggle('active',which=='music');"
+          "document.getElementById('tabBtnBbq').classList.toggle('active',which=='bbq');"
+          "location.hash=which=='bbq'?'bbq':'';"
+        "}"
+        "if(location.hash=='#bbq')showTab('bbq');"
         "</script>");
 
     httpd_resp_sendstr_chunk(req, HTML_TAIL);
@@ -625,8 +659,8 @@ static esp_err_t bbq_data_handler(httpd_req_t *req)
     int n = 0;
 
     n += snprintf(json + n, sizeof(json) - n,
-                  "{\"grills\":%d,\"box\":%s,\"meats\":[",
-                  MAX_GRILLS, bbq_ble_present() ? "true" : "false");
+                  "{\"grills\":%d,\"box\":%s,\"source\":%d,\"meats\":[",
+                  MAX_GRILLS, bbq_ble_present() ? "true" : "false", (int)bbq_source_get());
 
     // Doneness tables (Beef/Lamb/Pork) + chicken's single food-safety target.
     for (int m = 0; m < MEAT_TYPE_COUNT; m++) {
@@ -693,34 +727,58 @@ static esp_err_t bbq_assign_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, "{\"ok\":true}");
 }
 
+// ---- POST /bbq_source  body: mode=0(box)|1(probe) -------------------
+// Switching BLE source needs a different NimBLE stack, so — same as the
+// on-device Settings page — this persists the choice and reboots.
+
+static void web_reboot_cb(void *arg) { (void)arg; esp_restart(); }
+
+static esp_err_t bbq_source_handler(httpd_req_t *req)
+{
+    char body[32] = {0};
+    int  len = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (len <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No body"); return ESP_FAIL; }
+    body[len] = '\0';
+
+    char v[8];
+    form_field(body, "mode", v, sizeof(v));
+    bbq_source_t mode = (atoi(v) == BBQ_SRC_PROBE) ? BBQ_SRC_PROBE : BBQ_SRC_BOX;
+    bbq_source_set(mode);
+    ESP_LOGI(TAG, "web: BBQ source -> %d, rebooting", (int)mode);
+
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t r = httpd_resp_sendstr(req, "{\"ok\":true}");   // flush before restarting
+
+    const esp_timer_create_args_t targs = { .callback = web_reboot_cb, .name = "web_reboot" };
+    esp_timer_handle_t t;
+    if (esp_timer_create(&targs, &t) == ESP_OK)
+        esp_timer_start_once(t, 800000);   // 800ms — let the HTTP response land first
+    return r;
+}
+
+// ---- GET /bbq → redirect to the BBQ tab of the combined setup page --
+
 static esp_err_t bbq_get_handler(httpd_req_t *req)
 {
-    static const char PAGE[] =
-        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>BBQ Sensors</title><style>"
-        "body{font-family:-apple-system,sans-serif;background:#111;color:#eee;"
-        "max-width:520px;margin:0 auto;padding:20px 14px}"
-        "h1{color:#e87722;font-size:1.2em;text-align:center;margin-bottom:2px}"
-        "#s{color:#888;text-align:center;margin-bottom:16px;font-size:.85em}"
-        ".card{background:#1c1c1c;border-radius:10px;padding:12px 14px;margin:10px 0}"
-        ".hdr{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}"
-        ".name{font-weight:600}.temp{font-size:1.3em;font-weight:700}"
-        ".ok{color:#1ed760}.bad{color:#ff5555}"
-        ".ctl{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end}"
-        ".ctl label{font-size:.72rem;color:#999;display:block;margin-bottom:2px}"
-        "select,input{background:#262626;border:1px solid #333;border-radius:6px;"
-          "color:#eee;padding:6px 8px;font-size:.9rem}"
-        ".fld{min-width:0}.fld select,.fld input{width:100%;box-sizing:border-box}"
-        "button{background:#e87722;color:#000;border:none;border-radius:6px;"
-          "padding:8px 14px;font-weight:600;margin-top:10px;cursor:pointer}"
-        "button:disabled{background:#444;color:#888}"
-        ".empty{color:#666;text-align:center;padding:24px 0}"
-        ".hide{display:none}"
-        "</style></head><body>"
-        "<h1>BBQ Sensors</h1><div id='s'>loading&hellip;</div><div id='list'></div>"
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "/setup#bbq");
+    return httpd_resp_send(req, NULL, 0);
+}
+
+// Body-only markup for the BBQ tab — embedded inside the combined /setup
+// page (styles are the #tab-bbq-scoped rules in HTML_HEAD). Not sent as its
+// own response; /bbq now just redirects here (see bbq_get_handler above).
+static const char *bbq_tab_content(void)
+{
+    static const char CONTENT[] =
+        "<h2>BBQ Sensors</h2>"
+        "<div class='src-banner'>"
+          "Source: <b id='srcLabel'>&hellip;</b>"
+          "<button id='srcBtn' onclick='switchSource()' disabled>&hellip;</button>"
+        "</div>"
+        "<div id='s'>loading&hellip;</div><div id='list'></div>"
         "<script>"
-        "var MEATS={},GRILLS=1,KEYS=[];"
+        "var MEATS={},GRILLS=1,KEYS=[],CUR_SRC=0;"
         "var KINDS=[[4,'Beef'],[2,'Lamb'],[3,'Pork'],[1,'Chicken']];"
         "function opt(v,t,sel){return '<option value=\"'+v+'\"'+(sel?' selected':'')+'>'+t+'</option>';}"
         "function key(s){return s.src+'_'+s.hw;}"
@@ -774,15 +832,29 @@ static esp_err_t bbq_get_handler(httpd_req_t *req)
           "var t=document.getElementById('t_'+key(s));if(!t)continue;"
           "t.textContent=s.present?(s.temp.toFixed(1)+' \\u00b0C'):'Not connected';"
           "t.className='temp '+(s.present?'ok':'bad');}}"
+        "function updateSrcBanner(d){CUR_SRC=d.source;"
+          "document.getElementById('srcLabel').textContent="
+            "d.source==1?'Wireless Probe (standalone)':'BBQ Box';"
+          "var b=document.getElementById('srcBtn');"
+          "b.disabled=false;b.textContent=d.source==1?'Switch to BBQ Box':'Switch to Wireless Probe';}"
+        "function switchSource(){"
+          "var next=CUR_SRC==1?0:1,label=next==1?'Wireless Probe':'BBQ Box';"
+          "if(!confirm('Switch sensor source to '+label+'? The display will reboot.'))return;"
+          "document.getElementById('srcBtn').disabled=true;"
+          "fetch('/bbq_source',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},"
+            "body:'mode='+next})"
+            ".then(function(){document.getElementById('s').textContent='Rebooting\\u2026';})"
+            ".catch(function(){});"
+        "}"
         "function poll(first){fetch('/bbq_data').then(r=>r.json()).then(function(d){"
+          "updateSrcBanner(d);"
           "document.getElementById('s').textContent=d.box?'box online':'box not heard \\u2014 scanning\\u2026';"
           "var kk=d.sensors.map(key).join(',');"
           "if(first||kk!=KEYS.join(','))build(d);else refresh(d);"
         "}).catch(function(){});}"
         "poll(true);setInterval(function(){poll(false);},2000);"
-        "</script></body></html>";
-    httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, PAGE, HTTPD_RESP_USE_STRLEN);
+        "</script>";
+    return CONTENT;
 }
 
 // ---- Public API -----------------------------------------------------
@@ -812,6 +884,7 @@ bool web_server_start(void)
         { .uri = "/bbq",           .method = HTTP_GET,  .handler = bbq_get_handler         },
         { .uri = "/bbq_data",      .method = HTTP_GET,  .handler = bbq_data_handler        },
         { .uri = "/bbq_assign",    .method = HTTP_POST, .handler = bbq_assign_handler      },
+        { .uri = "/bbq_source",    .method = HTTP_POST, .handler = bbq_source_handler      },
     };
     for (int i = 0; i < (int)(sizeof(uris) / sizeof(uris[0])); i++)
         httpd_register_uri_handler(s_server, &uris[i]);

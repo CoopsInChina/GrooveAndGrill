@@ -13,6 +13,7 @@
 #include "ui_bbq_config.h"
 #include "ui_bbq_doneness.h"
 #include "ui_widgets.h"
+#include "ui_reboot.h"
 
 #include "esp_log.h"
 
@@ -40,6 +41,7 @@ static screen_create_fn_t s_create_fns[SCREEN_COUNT] = {
     [SCREEN_BBQ_CONFIG]    = ui_bbq_config_create,
     [SCREEN_BBQ_DONENESS]  = ui_bbq_doneness_create,
     [SCREEN_WIDGETS]       = ui_widgets_create,
+    [SCREEN_REBOOT]        = ui_reboot_create,
 };
 
 void ui_navigate_to(screen_id_t id)

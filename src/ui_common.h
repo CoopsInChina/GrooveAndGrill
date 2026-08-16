@@ -38,6 +38,7 @@ typedef enum {
     SCREEN_BBQ_CONFIG,
     SCREEN_BBQ_DONENESS,
     SCREEN_WIDGETS,
+    SCREEN_REBOOT,
     SCREEN_COUNT
 } screen_id_t;
 

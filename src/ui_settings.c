@@ -5,8 +5,8 @@
 #include "wifi_manager.h"
 #include "sonos_controller.h"
 #include "bbq_controller.h"
+#include "ui_reboot.h"
 #include "lvgl.h"
-#include "esp_system.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -211,8 +211,6 @@ static void build_ota_page(lv_obj_t *p)
 // ---- BBQ source page (BBQ Box observer  vs  direct wireless probe) ------
 // Changing source brings up a different BLE stack, so we persist + reboot.
 
-static void reboot_timer_cb(lv_timer_t *t) { (void)t; esp_restart(); }
-
 static void source_btn_cb(lv_event_t *e)
 {
     if (s_gesture_fired) { s_gesture_fired = false; return; }  // ignore swipe-clicks
@@ -221,17 +219,8 @@ static void source_btn_cb(lv_event_t *e)
 
     bbq_source_set(chosen);   // persisted; picked up on next boot
 
-    // Cover the screen with a notice, then reboot so main.c starts the matching
-    // BLE stack (observer vs central).
-    lv_obj_t *ov = lv_label_create(s_scr);
-    lv_label_set_text(ov, "Switching source…\nRebooting");
-    lv_obj_set_style_text_align(ov, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(ov, COL_TEXT, 0);
-    lv_obj_set_style_text_font(ov, &lv_font_montserrat_20, 0);
-    lv_obj_center(ov);
-
-    lv_timer_t *t = lv_timer_create(reboot_timer_cb, 600, NULL);
-    lv_timer_set_repeat_count(t, 1);
+    ui_reboot_begin("Sensor Mode Changed");
+    ui_navigate_to(SCREEN_REBOOT);
 }
 
 static void clear_setup_btn_cb(lv_event_t *e)
