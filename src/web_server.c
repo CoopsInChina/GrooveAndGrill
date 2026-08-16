@@ -135,6 +135,19 @@ static bool build_cmd_from_structured(const char *source, const char *type,
 {
     if (!id || !id[0]) return false;
 
+    // Sanitise the id: drop any ?query (e.g. Spotify's ?si= share tag) and
+    // trailing whitespace that can arrive when a full/pasted id is entered.
+    char clean_id[96];
+    snprintf(clean_id, sizeof(clean_id), "%s", id);
+    char *qp = strpbrk(clean_id, "?&");
+    if (qp) *qp = '\0';
+    for (int i = (int)strlen(clean_id) - 1;
+         i >= 0 && (clean_id[i] == '\n' || clean_id[i] == '\r' ||
+                    clean_id[i] == ' '  || clean_id[i] == '\t'); i--)
+        clean_id[i] = '\0';
+    id = clean_id;
+    if (!id[0]) return false;
+
     if (strcmp(source, "spotify") == 0) {
         const char *api_type = type;  // playlist / album / track
         snprintf(cmd_out, cmd_sz, "spotify/now/spotify:%s:%s", api_type, id);
@@ -324,10 +337,6 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
             "<input type='text' id='sid' placeholder='37i9dQZF1EVJSvZp5AOML2'>"
           "</div>"
         "</div>"
-        "<label>Name (shown on device)</label>"
-        "<input type='text' id='sname' placeholder='Leave blank to auto-generate'>"
-        "<label>Art image URL <span style='color:#555'>(optional — Spotify auto-fetches)</span></label>"
-        "<input type='text' id='sart' placeholder='https://...'>"
         "<button id='btn-s' class='add-btn' type='button' onclick='submitStructured()'>+ Add</button>"
         "</div>"
 
@@ -337,10 +346,6 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
         "<label>Share URL</label>"
         "<input type='text' id='url' "
           "placeholder='https://open.spotify.com/playlist/37i9dQZF1EVJSvZp5AOML2'>"
-        "<label>Name (shown on device)</label>"
-        "<input type='text' id='uname' placeholder='Leave blank to auto-generate'>"
-        "<label>Art image URL <span style='color:#555'>(optional — Spotify auto-fetches)</span></label>"
-        "<input type='text' id='uart' placeholder='https://...'>"
         "<button id='btn-u' class='add-btn' type='button' onclick='submitUrl()'>+ Add from URL</button>"
         "</div>"
 
@@ -416,36 +421,32 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
           "var src=document.getElementById('src').value;"
           "var typ=document.getElementById('typ').value;"
           "var id=document.getElementById('sid').value.trim();"
-          "var nm=document.getElementById('sname').value.trim();"
-          "var art=document.getElementById('sart').value.trim();"
           "if(!id){setBusy('btn-s',false);setStatus('');alert('Please enter an ID');return;}"
-          "var params={source_type_id:src+'|'+typ+'|'+id,name:nm};"
-          "if(!nm&&src==='spotify'){"
+          "var params={source_type_id:src+'|'+typ+'|'+id,name:''};"
+          "if(src==='spotify'){"
             "setStatus('Looking up Spotify info…');"
             "var spUrl='https://open.spotify.com/'+typ+'/'+id;"
             "resolveSpotify(spUrl,function(t,thumb){"
               "params.name=t;"
-              "doAdd('/add_structured',params,art||thumb,'btn-s');"
+              "doAdd('/add_structured',params,thumb,'btn-s');"
             "});"
           "}else{"
-            "doAdd('/add_structured',params,art,'btn-s');"
+            "doAdd('/add_structured',params,'','btn-s');"
           "}"
         "}"
         "function submitUrl(){"
           "setBusy('btn-u',true);setStatus('Working…');"
           "var url=document.getElementById('url').value.trim();"
-          "var nm=document.getElementById('uname').value.trim();"
-          "var art=document.getElementById('uart').value.trim();"
           "if(!url){setBusy('btn-u',false);setStatus('');alert('Please enter a URL');return;}"
-          "var params={url:url,name:nm};"
-          "if(!nm&&url.indexOf('open.spotify.com')!==-1){"
+          "var params={url:url,name:''};"
+          "if(url.indexOf('open.spotify.com')!==-1){"
             "setStatus('Looking up Spotify info…');"
             "resolveSpotify(url,function(t,thumb){"
               "params.name=t;"
-              "doAdd('/add_by_url',params,art||thumb,'btn-u');"
+              "doAdd('/add_by_url',params,thumb,'btn-u');"
             "});"
           "}else{"
-            "doAdd('/add_by_url',params,art,'btn-u');"
+            "doAdd('/add_by_url',params,'','btn-u');"
           "}"
         "}"
         "</script>"

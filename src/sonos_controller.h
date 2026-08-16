@@ -36,6 +36,7 @@ typedef struct {
 typedef struct {
     char name[64];
     char ip[24];
+    char uuid[48];   // RINCON id (from device_description UDN); for queue URIs
     int  error_count;
     bool connected;
 } sonos_speaker_t;
