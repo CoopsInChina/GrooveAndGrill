@@ -313,7 +313,11 @@ esp_err_t display_init(void)
             .avoid_tearing = true,
         },
     };
-    lvgl_port_add_disp_rgb(&disp_cfg, &lvgl_rgb_cfg);
+    lv_disp_t *disp = lvgl_port_add_disp_rgb(&disp_cfg, &lvgl_rgb_cfg);
+    if (!disp) {
+        ESP_LOGE(TAG, "lvgl_port_add_disp_rgb failed");
+        return ESP_FAIL;
+    }
 
     ESP_LOGI(TAG, "LVGL display ready (%dx%d)", LCD_H_RES, LCD_V_RES);
     return ESP_OK;
