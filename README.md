@@ -162,7 +162,7 @@ built from the commit `version.json` claims, not something stale or tampered:
 ## First-time setup
 
 1. **WiFi:** on boot, if no credentials are stored the device starts a setup
-   access point (`MusicMeat-Setup`). Join it and follow the on-screen QR code /
+   access point (`Groove&GrillSetup`). Join it and follow the on-screen QR code /
    URL to enter your network details.
 2. **Sonos:** the device discovers speakers via SSDP; the last-used speaker is
    cached in NVS. If a `node-sonos-http-api` instance happens to be on your LAN

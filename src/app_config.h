@@ -1,11 +1,11 @@
 #pragma once
 
 // ============================================================
-// Music and Meat — application configuration
+// Groove & Grill — application configuration
 // ============================================================
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION        "1.1.3"
+#define FIRMWARE_VERSION        "1.1.4"
 #endif
 
 // ---- OTA ----
@@ -40,7 +40,7 @@
 #define WIFI_CONNECT_RETRIES    3
 
 // ---- WiFi AP (captive portal for WiFi setup) ----
-#define WIFI_AP_SSID            "MusicMeat-Setup"
+#define WIFI_AP_SSID            "Groove&GrillSetup"
 #define WIFI_AP_PASS            ""          // open AP
 #define WIFI_AP_CHANNEL         6
 #define WIFI_AP_MAX_CONN        2

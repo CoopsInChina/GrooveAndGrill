@@ -213,6 +213,6 @@ void app_main(void)
                                                pdTRUE, NULL, autodim_timer_cb);
     if (autodim_timer) xTimerStart(autodim_timer, 0);
 
-    ESP_LOGI(TAG, "Music and Meat v%s running — heap: %lu free",
+    ESP_LOGI(TAG, "Groove & Grill v%s running — heap: %lu free",
              FIRMWARE_VERSION, (unsigned long)esp_get_free_heap_size());
 }
