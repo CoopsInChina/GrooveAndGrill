@@ -224,14 +224,14 @@ static void update_task(void *arg)
     // BLE (scanning + any live connections) shares the same radio as WiFi —
     // left running, it throttles the download badly. Paused for the
     // download, resumed on every exit path below.
-    bbq_radio_pause_for_ota(true);
+    bbq_radio_pause(true);
 
     if (!s_ota_open) {
         s_ota_partition = esp_ota_get_next_update_partition(NULL);
         if (!s_ota_partition || esp_ota_begin(s_ota_partition, OTA_SIZE_UNKNOWN, &s_ota_handle) != ESP_OK) {
             g_last_network_end_ms = ms_now();
             xSemaphoreGive(g_network_mutex);
-            bbq_radio_pause_for_ota(false);
+            bbq_radio_pause(false);
             s.state = OTA_DONE_FAIL;
             snprintf(s.error, sizeof(s.error), "Could not start download");
             set_status(&s);
@@ -283,7 +283,7 @@ static void update_task(void *arg)
     if (!client || err != ESP_OK) {
         g_last_network_end_ms = ms_now();
         xSemaphoreGive(g_network_mutex);
-        bbq_radio_pause_for_ota(false);
+        bbq_radio_pause(false);
         s.state = OTA_DONE_FAIL;
         snprintf(s.error, sizeof(s.error), "Could not start download — progress kept, try again");
         set_status(&s);
@@ -340,7 +340,7 @@ static void update_task(void *arg)
     esp_http_client_cleanup(client);
     g_last_network_end_ms = ms_now();
     xSemaphoreGive(g_network_mutex);
-    bbq_radio_pause_for_ota(false);
+    bbq_radio_pause(false);
 
     if (stalled || failed) {
         // s_ota_open / s_ota_written deliberately left as-is: next Update Now

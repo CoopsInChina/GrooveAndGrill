@@ -33,6 +33,13 @@ CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
 # Allow EXT_RAM_BSS_ATTR to place static arrays in PSRAM, freeing DRAM for task stacks
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 
+# WiFi setup portal's DNS hijack redirects every domain to the device, so a
+# phone's parallel connectivity-check probes can exhaust the default 10-socket
+# ceiling (httpd alone claims up to 7 by default) — seen as permanent
+# "error in accept (23)" spam that never recovers. See wifi_manager.c's
+# lru_purge_enable for the other half of this fix.
+CONFIG_LWIP_MAX_SOCKETS=14
+
 # Cache — wider cache lines improve RGB DMA throughput
 CONFIG_ESP32S3_DATA_CACHE_64KB=y
 CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y

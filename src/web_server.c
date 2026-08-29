@@ -321,7 +321,6 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
             "<label>Source</label>"
             "<select name='source' id='src' onchange='srcChanged()'>"
               "<option value='spotify'>Spotify</option>"
-              "<option value='apple'>Apple Music</option>"
             "</select>"
           "</div>"
           "<div class='add-col'>"
@@ -892,6 +891,13 @@ bool web_server_start(void)
 
     ESP_LOGI(TAG, "Setup server: http://%s/setup", wifi_manager_ip());
     return true;
+}
+
+void web_server_stop(void)
+{
+    if (!s_server) return;
+    httpd_stop(s_server);
+    s_server = NULL;
 }
 
 bool web_server_running(void)

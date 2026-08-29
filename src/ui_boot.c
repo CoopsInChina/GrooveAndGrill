@@ -16,10 +16,12 @@ static lv_obj_t *s_icon[3] = {NULL, NULL, NULL};
 
 static const char *ICON_SYMBOL[3] = { LV_SYMBOL_WIFI, LV_SYMBOL_AUDIO, LV_SYMBOL_DRIVE };
 
-// Icon positions, matched to the artwork in assets/Boot.jpg: Sonos sits dead
-// centre on the vinyl/speaker graphic, WiFi and Server flank the grill.
-static const int ICON_X[3] = { -165, 0, 165 };
-static const int ICON_Y[3] = { 6,    0, 6   };
+// Icon positions, matched to the artwork in assets/Boot.jpg. Server's own
+// icon is hidden (see ui_boot_create) — its node-sonos-http-api discovery
+// is optional/legacy and not worth surfacing as a status the user has to
+// care about — so Sonos has moved into that now-vacant right-hand slot.
+static const int ICON_X[3] = { -165, 165, 165 };
+static const int ICON_Y[3] = { 6,    6,   6   };
 
 static void make_icon(int idx)
 {
@@ -44,9 +46,11 @@ lv_obj_t *ui_boot_create(void)
     lv_obj_clear_flag(bg, LV_OBJ_FLAG_CLICKABLE);
 
     // ---- Status indicator icons ----
+    // Server (node-sonos-http-api discovery) has no icon — optional/legacy
+    // fallback, not worth surfacing to the user. ui_boot_set_icon() calls
+    // for it are safe no-ops since s_icon[BOOT_ICON_SERVER] stays NULL.
     make_icon(BOOT_ICON_WIFI);
     make_icon(BOOT_ICON_SONOS);
-    make_icon(BOOT_ICON_SERVER);
 
     // ---- Status text — near the bottom, on a translucent backdrop so it
     // stays legible over the artwork underneath ----

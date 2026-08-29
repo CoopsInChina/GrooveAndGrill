@@ -39,7 +39,7 @@ uint32_t bbq_ble_age_ms(void);
 bool bbq_ble_present(void);
 
 // Temporarily stop/resume passive scanning — used to free the shared radio
-// for a WiFi-heavy operation (OTA download). See bbq_controller.h's
-// bbq_radio_pause_for_ota().
+// for a WiFi-heavy operation (OTA download, WiFi setup AP). See
+// bbq_controller.h's bbq_radio_pause().
 void bbq_ble_scan_pause(void);
 void bbq_ble_scan_resume(void);

@@ -5,7 +5,7 @@
 // ============================================================
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION        "1.1.4"
+#define FIRMWARE_VERSION        "1.2.0"
 #endif
 
 // ---- OTA ----
@@ -40,7 +40,10 @@
 #define WIFI_CONNECT_RETRIES    3
 
 // ---- WiFi AP (captive portal for WiFi setup) ----
-#define WIFI_AP_SSID            "Groove&GrillSetup"
+// No "&" — some phones' QR/camera-based WiFi scanners mangle it (likely a
+// URL-style parse pass truncating the SSID at the "&"), causing a scanned
+// join to silently fail with no association attempt ever reaching the AP.
+#define WIFI_AP_SSID            "GrooveGrillSetup"
 #define WIFI_AP_PASS            ""          // open AP
 #define WIFI_AP_CHANNEL         6
 #define WIFI_AP_MAX_CONN        2

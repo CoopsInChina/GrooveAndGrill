@@ -220,7 +220,7 @@ bool bbq_link_up(void)
     return (s_source == BBQ_SRC_PROBE) ? ble_probe_any() : bbq_ble_present();
 }
 
-void bbq_radio_pause_for_ota(bool pause)
+void bbq_radio_pause(bool pause)
 {
     if (s_source == BBQ_SRC_PROBE) {
         if (pause) ble_probe_scan_pause();
