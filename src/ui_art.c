@@ -590,7 +590,12 @@ void ui_art_request_blob(const uint8_t *jpeg, size_t sz)
     xSemaphoreTake(s_url_mutex, portMAX_DELAY);
     s_blob_data = jpeg;
     s_blob_size = sz;
-    s_pending[0] = '\0';   // cancel any queued URL; blob takes priority
+    // Blob and URL art use fully separate buffers/descriptors/flags (see
+    // s_blob_buf vs s_disp_buf) — no need to cancel a pending URL request
+    // here; art_task already checks blob first and just defers the URL
+    // work to its next loop iteration. This used to also clear s_pending,
+    // which meant every favourites swipe silently dropped the main
+    // screen's own in-flight art request.
     xSemaphoreGive(s_url_mutex);
 }
 
