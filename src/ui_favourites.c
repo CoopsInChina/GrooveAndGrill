@@ -17,13 +17,23 @@ static lv_timer_t *s_refresh_timer = NULL;
 static lv_timer_t *s_art_timer     = NULL;
 static int         s_index         = 0;
 static int         s_last_count    = -1;
+// Which way the current page was arrived at (+1 = swiped forward, art
+// arrives from the right; -1 = swiped back, from the left) — used as a
+// fallback slide-in direction for reveal_art_if_ready, for whichever
+// page's decode is still the one most recently landed on when its art
+// finally becomes ready (usually already in progress by arrival — see
+// request_art_for's proactive neighbour pre-fetch below).
+static int         s_enter_dir     = 1;
 static bool        s_gesture_fired = false;
 
-// One page per favourite slot, plus one add-slot page. Only the active
-// page's art is ever requested from ui_art (its decode pipeline is
-// single-slot — see ui_art.h) — neighbour pages just show a plain
-// placeholder until you actually scroll onto them, so the drag/snap
-// motion is real LVGL scrolling, not a full-content swap.
+// One page per favourite slot, plus one add-slot page. Both immediate
+// neighbours of the current page get their art proactively requested as
+// soon as you land on a page (see request_art_for) — ui_art.c gives each
+// favourite index its own PERMANENT decode slot (favourites are rarely
+// added/changed, so there's no eviction to worry about — see ui_art.h),
+// so the incoming page's art usually has a real chance of being ready
+// before a swipe even settles, and instantly re-appears with no re-decode
+// on any later revisit.
 #define MAX_PAGES (MAX_FAVOURITES + 1)
 static lv_obj_t *s_page[MAX_PAGES]      = {0};
 static lv_obj_t *s_page_art[MAX_PAGES]  = {0};   // NULL on the add-slot page
@@ -31,13 +41,6 @@ static lv_obj_t *s_add_btn      = NULL;          // lives on the last page
 static lv_obj_t *s_qr           = NULL;
 static lv_obj_t *s_qr_url       = NULL;
 static int       s_page_count   = 0;
-// Which page the currently in-flight/pending blob decode was actually
-// requested for. Decode is async (a real download+decode can take
-// 100-300ms+), and s_index can change again before it lands — applying a
-// finished decode to "whatever s_index currently is" rather than the page
-// it was actually requested for caused art to land on the wrong page (or
-// bleed onto whatever screen was current once you'd navigated away).
-static int       s_blob_req_index = -1;
 
 // Page-dot indicator — one dot per favourite slot plus the add slot,
 // matching the settings screen's carousel style.
@@ -78,13 +81,11 @@ static void update_dots(int active)
 
 static void add_btn_cb(lv_event_t *e);
 static void show_index_impl(int index, bool scroll_to);
+static void request_art_for(int idx);
 
 static void build_pages(int count)
 {
     lv_obj_clean(s_container);
-    // Every page's art object is destroyed and recreated blank below — any
-    // earlier "already requested this index" tracking is now invalid.
-    s_blob_req_index = -1;
     memset(s_page,     0, sizeof(s_page));
     memset(s_page_art, 0, sizeof(s_page_art));
     s_add_btn = s_qr = s_qr_url = NULL;
@@ -306,19 +307,90 @@ static void scr_loaded_cb(lv_event_t *e)
     ui_favourites_show_index(0);
 }
 
+#define ART_SLIDE_IN_PX 70
+#define ART_SLIDE_IN_MS 220
+
+static void art_slide_anim_cb(void *obj, int32_t v)
+{
+    lv_obj_set_style_translate_x((lv_obj_t *)obj, (lv_coord_t)v, 0);
+}
+
+// Requests blob art for a real favourite page (not the add slot, not out
+// of range). Cheap to call speculatively — ui_art_request_blob no-ops if
+// this tag is already cached or already queued. Bounded by s_page_count,
+// which is only valid once the carousel has actually been built — for
+// requesting art before that (boot time), see ui_favourites_prefetch_all.
+static void request_art_for(int idx)
+{
+    if (idx < 0 || idx >= s_page_count) return;
+    if (idx >= sonos_device_fav_count()) return;   // add slot or stale range
+
+    const uint8_t *art_data = sonos_device_fav_art_data(idx);
+    size_t         art_sz   = sonos_device_fav_art_size(idx);
+    if (art_sz > 0 && art_data) {
+        ui_art_request_blob(idx, art_data, art_sz);
+    }
+}
+
+// Public: request every current favourite's art, independent of whether
+// the carousel screen has ever been built (s_page_count may still be 0 —
+// this is what makes it safe to call at boot, before the user has ever
+// opened Favourites).
+void ui_favourites_prefetch_all(void)
+{
+    int count = sonos_device_fav_count();
+    if (count > MAX_FAVOURITES) count = MAX_FAVOURITES;
+    for (int i = 0; i < count; i++) {
+        const uint8_t *art_data = sonos_device_fav_art_data(i);
+        size_t         art_sz   = sonos_device_fav_art_size(i);
+        if (art_sz > 0 && art_data) {
+            ui_art_request_blob(i, art_data, art_sz);
+        }
+    }
+}
+
+// Reveals art for page `idx` with the slide-in animation, if a decode is
+// ready for it. Called for the current page AND its immediate neighbours
+// (see art_timer_cb) — revealing an off-screen neighbour is harmless (it's
+// not visible yet), and revealing one that's currently PARTIALLY visible
+// mid-drag is exactly what gives the "new art slides in with the swipe"
+// effect: since ui_art_request_blob was already called for it back when
+// we arrived at its neighbour (see show_index_impl), it often finishes
+// decoding while the page is still moving, so it can look like it's
+// riding along with the real scroll rather than popping in after landing.
+static void reveal_art_if_ready(int idx)
+{
+    if (idx < 0 || idx >= s_page_count) return;
+    lv_obj_t *art = s_page_art[idx];
+    if (!art) return;
+    // ui_art_update_blob is idempotent now (a favourite's cached art never
+    // goes stale — see ui_art.h) and returns true on every call once
+    // content exists, not just the first. Without this guard, art_timer_cb
+    // re-triggered the slide-in animation on the current (and neighbour)
+    // pages every 500ms tick forever, with no interaction at all — visibly
+    // sliding back and forth continuously.
+    if (!lv_obj_has_flag(art, LV_OBJ_FLAG_HIDDEN)) return;
+    if (!ui_art_update_blob(art, idx)) return;
+
+    lv_obj_set_style_translate_x(art, s_enter_dir * ART_SLIDE_IN_PX, 0);
+    lv_obj_clear_flag(art, LV_OBJ_FLAG_HIDDEN);
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, art);
+    lv_anim_set_exec_cb(&a, art_slide_anim_cb);
+    lv_anim_set_values(&a, s_enter_dir * ART_SLIDE_IN_PX, 0);
+    lv_anim_set_time(&a, ART_SLIDE_IN_MS);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+}
+
 static void art_timer_cb(lv_timer_t *t)
 {
     if (lv_scr_act() != s_scr) return;
-    if (s_blob_req_index < 0 || s_blob_req_index >= s_page_count) return;
-    lv_obj_t *art = s_page_art[s_blob_req_index];
-    if (!art) return;
-    // Apply to the page this decode was actually requested for — not
-    // necessarily the current s_index, which may have moved on already.
-    if (!ui_art_update_blob(art)) return;
-    // Only reveal if that page is still the one being viewed; if the user
-    // has since moved on, leave it hidden — it's now correctly decoded and
-    // cached on its own widget for whenever they return to it.
-    if (s_blob_req_index == s_index) lv_obj_clear_flag(art, LV_OBJ_FLAG_HIDDEN);
+    reveal_art_if_ready(s_index - 1);
+    reveal_art_if_ready(s_index);
+    reveal_art_if_ready(s_index + 1);
 }
 
 static void scr_del_cb(lv_event_t *e)
@@ -331,7 +403,6 @@ static void scr_del_cb(lv_event_t *e)
     s_dots_cont = NULL;
     s_dot_count = 0;
     s_page_count = 0;
-    s_blob_req_index = -1;
     memset(s_dots,     0, sizeof(s_dots));
     memset(s_page,     0, sizeof(s_page));
     memset(s_page_art, 0, sizeof(s_page_art));
@@ -439,6 +510,16 @@ static void show_index_impl(int index, bool scroll_to)
 
     int count = sonos_device_fav_count();
     if (count != s_last_count) {
+        // Skip on the very first build (s_last_count starts at -1) — that
+        // would just throw away ui_favourites_prefetch_all()'s boot-time
+        // work for nothing. On any REAL change (add/remove while already
+        // running), invalidate everything: a removal shifts every later
+        // favourite's index down, so a permanent slot keyed by index could
+        // otherwise go on holding a different favourite's stale content.
+        if (s_last_count != -1) {
+            ui_art_blob_invalidate_all();
+            ui_favourites_prefetch_all();
+        }
         s_last_count = count;
         build_pages(count);
     }
@@ -447,13 +528,14 @@ static void show_index_impl(int index, bool scroll_to)
     if (index < 0) index = 0;
     int prev_index = s_index;
     bool index_changed = (prev_index != index);
+    if (index_changed) s_enter_dir = (index > prev_index) ? 1 : -1;
     s_index = index;
 
     // Hide the page we're leaving's art — each page keeps its own art
     // image object alive permanently (never destroyed until the count
-    // changes), and it was only ever re-hidden in preparation for its own
-    // next decode, never when you scrolled away from it. Left revealed
-    // indefinitely once first shown.
+    // changes). It'll re-reveal instantly (no re-decode) if you come
+    // straight back, since its decoded content is cached permanently in
+    // ui_art.c (see ui_art_request_blob), not evicted.
     if (index_changed && prev_index >= 0 && prev_index < MAX_PAGES && s_page_art[prev_index]) {
         lv_obj_add_flag(s_page_art[prev_index], LV_OBJ_FLAG_HIDDEN);
     }
@@ -465,31 +547,18 @@ static void show_index_impl(int index, bool scroll_to)
         lv_obj_scroll_to_view(s_page[index], LV_ANIM_OFF);
     }
 
-    // A single physical swipe can fire scroll_end more than once (seen in
-    // the field — elastic/throw settling in stages), often reporting the
-    // SAME index each time. Without this guard, every one of those no-op
-    // calls still hid the already-correct art and kicked off a fresh
-    // decode of the exact same image — a visible flicker for zero reason.
-    // Only (re)request when the target index actually changed, or this is
-    // the very first time we've ever requested it (s_blob_req_index starts
-    // at -1, so the initial on-create call still goes through).
-    bool need_request = index_changed || (s_blob_req_index != index);
-
     bool is_add = (index >= count);
     if (is_add) {
-        if (need_request) ui_art_request(NULL);
-    } else if (need_request) {
-        lv_obj_t *art = s_page_art[index];
-        const uint8_t *art_data = sonos_device_fav_art_data(index);
-        size_t         art_sz   = sonos_device_fav_art_size(index);
-
-        if (art) lv_obj_add_flag(art, LV_OBJ_FLAG_HIDDEN);   // re-reveal once decoded
-        if (art_sz > 0 && art_data) {
-            s_blob_req_index = index;   // art_timer_cb applies the result here
-            ui_art_request_blob(art_data, art_sz);
-        } else {
-            ui_art_request(NULL);
-        }
+        if (index_changed) ui_art_request(NULL);
+    } else if (index_changed) {
+        // Proactively request both neighbours too — ui_art_request_blob
+        // no-ops if a tag is already cached/queued (favourites' art slots
+        // are permanent, see ui_art.h), so this is cheap, and it's what
+        // gives the incoming page's art a real chance to be ready before
+        // you even finish the next swipe (see reveal_art_if_ready).
+        request_art_for(index);
+        request_art_for(index - 1);
+        request_art_for(index + 1);
     }
 }
 

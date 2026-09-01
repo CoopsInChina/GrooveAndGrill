@@ -10,6 +10,7 @@
  */
 
 #include "ui_art.h"
+#include "app_config.h"   // MAX_FAVOURITES
 #include "globals.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
@@ -60,16 +61,41 @@ static volatile uint32_t s_dominant = 0x1a1a1a;
 static SemaphoreHandle_t s_url_mutex    = NULL;
 static char              s_pending[512] = {0};
 static char              s_current[512] = {0};
-// Blob path: set by ui_art_request_blob(); art_task consumes it once.
-static const uint8_t    *s_blob_data    = NULL;
-static size_t            s_blob_size    = 0;
 
-// Dedicated display buffer for blob (favourites) art.
-// Kept separate from the URL double-buffer so the two screens can't
-// overwrite each other's LVGL image descriptor.
-static uint16_t     *s_blob_buf      = NULL;
-static lv_img_dsc_t  s_blob_art_dsc  = {0};
-static volatile bool s_new_blob_art  = false;
+// Blob art: one permanent, dedicated PSRAM slot per favourite index
+// (favourites uses its page index as the tag). Favourites are relatively
+// static — rarely added, removed, or re-shot — so unlike a typical
+// cache there's NO eviction: once decoded, a favourite's art stays valid
+// indefinitely until ui_art_blob_invalidate(_all)() is explicitly called
+// (the favourites list actually changed). This is what lets the carousel
+// show an already-visited page's art instantly on return, with no
+// re-decode and no staleness class of bug — a fixed small rotating pool
+// of slots was tried first and hit exactly that (a slot could get reused
+// for a different tag before you swiped back to the one it used to hold).
+// Buffers are allocated lazily, one per favourite that actually exists —
+// bounded by real usage, not the ART_BLOB_SLOTS ceiling. Worst case (all
+// MAX_FAVOURITES populated) is ~3.5MB; PSRAM has consistently shown
+// multiple MB free at steady state in this project's own boot logs, and
+// a failed allocation here just leaves that one favourite uncached
+// (skips storing decoded content) rather than crashing.
+#define ART_BLOB_SLOTS      MAX_FAVOURITES
+#define ART_BLOB_QUEUE_LEN  4
+
+typedef struct {
+    bool          has_content;  // decoded and ready to display
+    uint16_t     *buf;          // allocated lazily, on first request for this index
+    lv_img_dsc_t  dsc;
+} blob_slot_t;
+
+typedef struct {
+    int            tag;
+    const uint8_t *data;
+    size_t         size;
+} blob_req_t;
+
+static blob_slot_t s_blob_slot[ART_BLOB_SLOTS];
+static blob_req_t  s_blob_queue[ART_BLOB_QUEUE_LEN];
+static int         s_blob_queue_len = 0;    // guarded by s_url_mutex
 
 // TJpgDec work pool — 4 KB, lives in IRAM (fast access needed during MCU decode).
 static uint8_t s_tjpgd_pool[ART_TJPGD_POOL_BYTES] __attribute__((aligned(4)));
@@ -398,19 +424,21 @@ static void art_task(void *arg)
     static char url[512];
 
     while (1) {
-        // ── Check for work: blob takes priority over URL ──────────────────────
-        const uint8_t *blob    = NULL;
-        size_t         blob_sz = 0;
+        // ── Check for work: blob queue takes priority over URL ────────────────
+        const uint8_t *blob     = NULL;
+        size_t         blob_sz  = 0;
+        int            blob_tag = -1;
         bool           has_work;
 
         xSemaphoreTake(s_url_mutex, portMAX_DELAY);
-        if (s_blob_data && s_blob_size > 0) {
-            blob        = s_blob_data;
-            blob_sz     = s_blob_size;
-            s_blob_data = NULL;
-            s_blob_size = 0;
-            has_work    = true;
-            url[0]      = '\0';
+        if (s_blob_queue_len > 0) {
+            blob_tag = s_blob_queue[0].tag;
+            blob     = s_blob_queue[0].data;
+            blob_sz  = s_blob_queue[0].size;
+            for (int i = 1; i < s_blob_queue_len; i++) s_blob_queue[i - 1] = s_blob_queue[i];
+            s_blob_queue_len--;
+            has_work = true;
+            url[0]   = '\0';
         } else {
             has_work = (s_pending[0] != '\0' &&
                         strcmp(s_pending, s_current) != 0);
@@ -517,13 +545,31 @@ static void art_task(void *arg)
         // ── Signal LVGL (separate paths to prevent descriptor aliasing) ──────
         s_dominant = dom;
         if (blob) {
-            // Copy to dedicated blob buf — s_art_dsc (URL path) is untouched.
-            if (s_blob_buf) memcpy(s_blob_buf, s_work_buf, ART_PIXEL_BUF_BYTES);
-            s_new_blob_art = true;
-            uint32_t t0 = xTaskGetTickCount();
-            while (s_new_blob_art && (xTaskGetTickCount() - t0) < pdMS_TO_TICKS(ART_CONSUMED_TIMEOUT_MS))
-                vTaskDelay(pdMS_TO_TICKS(100));
-            s_new_blob_art = false;
+            // Direct index into this favourite's own permanent slot — no
+            // consumption-wait needed (unlike the URL path below): each
+            // slot is a dedicated buffer that's never reused for a
+            // different tag, so there's no risk of racing the very next
+            // loop iteration the way s_work_buf itself is reused.
+            if (blob_tag >= 0 && blob_tag < ART_BLOB_SLOTS) {
+                if (!s_blob_slot[blob_tag].buf) {
+                    s_blob_slot[blob_tag].buf = (uint16_t *)heap_caps_malloc(ART_PIXEL_BUF_BYTES,
+                                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                    if (s_blob_slot[blob_tag].buf) {
+                        memset(&s_blob_slot[blob_tag].dsc, 0, sizeof(s_blob_slot[blob_tag].dsc));
+                        s_blob_slot[blob_tag].dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
+                        s_blob_slot[blob_tag].dsc.header.w  = ART_SIZE;
+                        s_blob_slot[blob_tag].dsc.header.h  = ART_SIZE;
+                        s_blob_slot[blob_tag].dsc.data_size = ART_PIXEL_BUF_BYTES;
+                        s_blob_slot[blob_tag].dsc.data      = (const uint8_t *)s_blob_slot[blob_tag].buf;
+                    } else {
+                        ESP_LOGE(TAG, "blob slot %d alloc failed — leaving uncached", blob_tag);
+                    }
+                }
+                if (s_blob_slot[blob_tag].buf) {
+                    memcpy(s_blob_slot[blob_tag].buf, s_work_buf, ART_PIXEL_BUF_BYTES);
+                    s_blob_slot[blob_tag].has_content = true;
+                }
+            }
         } else {
             uint16_t *tmp = s_disp_buf; s_disp_buf = s_work_buf; s_work_buf = tmp;
             s_new_art = true;
@@ -546,9 +592,7 @@ void ui_art_init(void)
                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_work_buf = (uint16_t *)heap_caps_calloc(ART_PIXEL_BUF_BYTES, 1,
                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    s_blob_buf = (uint16_t *)heap_caps_calloc(ART_PIXEL_BUF_BYTES, 1,
-                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_disp_buf || !s_work_buf || !s_blob_buf)
+    if (!s_disp_buf || !s_work_buf)
         ESP_LOGE(TAG, "art buf alloc failed");
 
     // Seed URL descriptor — data pointer filled in on first ui_art_update()
@@ -559,18 +603,15 @@ void ui_art_init(void)
     s_art_dsc.data_size = ART_PIXEL_BUF_BYTES;
     s_art_dsc.data      = (const uint8_t *)s_disp_buf;
 
-    // Seed blob descriptor — points to its own dedicated buffer permanently
-    memset(&s_blob_art_dsc, 0, sizeof(s_blob_art_dsc));
-    s_blob_art_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
-    s_blob_art_dsc.header.w  = ART_SIZE;
-    s_blob_art_dsc.header.h  = ART_SIZE;
-    s_blob_art_dsc.data_size = ART_PIXEL_BUF_BYTES;
-    s_blob_art_dsc.data      = (const uint8_t *)s_blob_buf;
+    // Blob slots are allocated lazily, one per favourite index, the first
+    // time that index is actually requested (see art_task) — not here,
+    // since most users won't have anywhere near MAX_FAVOURITES favourites
+    // and there's no need to reserve buffers for slots that will never be
+    // used. s_blob_slot[] starts zeroed (static), i.e. all has_content=false.
 
     // Pin art task to core 1 (LVGL runs on core 0) to avoid blocking the UI.
     xTaskCreatePinnedToCore(art_task, "ui_art", ART_TASK_STACK, NULL, 2, NULL, 1);
-    ESP_LOGI(TAG, "init OK  disp=%p work=%p blob=%p",
-             (void*)s_disp_buf, (void*)s_work_buf, (void*)s_blob_buf);
+    ESP_LOGI(TAG, "init OK  disp=%p work=%p", (void*)s_disp_buf, (void*)s_work_buf);
 }
 
 void ui_art_request(const char *raw_url)
@@ -584,19 +625,40 @@ void ui_art_request(const char *raw_url)
     xSemaphoreGive(s_url_mutex);
 }
 
-void ui_art_request_blob(const uint8_t *jpeg, size_t sz)
+void ui_art_request_blob(int tag, const uint8_t *jpeg, size_t sz)
 {
     if (!s_url_mutex || !jpeg || sz < 3) return;
+    if (tag < 0 || tag >= ART_BLOB_SLOTS) return;
     xSemaphoreTake(s_url_mutex, portMAX_DELAY);
-    s_blob_data = jpeg;
-    s_blob_size = sz;
-    // Blob and URL art use fully separate buffers/descriptors/flags (see
-    // s_blob_buf vs s_disp_buf) — no need to cancel a pending URL request
-    // here; art_task already checks blob first and just defers the URL
-    // work to its next loop iteration. This used to also clear s_pending,
-    // which meant every favourites swipe silently dropped the main
-    // screen's own in-flight art request.
+
+    // Skip if this tag is already cached (permanent slot — see comment
+    // above) or already queued to become so. A genuine re-request only
+    // happens after ui_art_blob_invalidate(_all)() clears has_content.
+    bool already = s_blob_slot[tag].has_content;
+    if (!already)
+        for (int i = 0; i < s_blob_queue_len; i++)
+            if (s_blob_queue[i].tag == tag) { already = true; break; }
+
+    if (!already && s_blob_queue_len < ART_BLOB_QUEUE_LEN) {
+        s_blob_queue[s_blob_queue_len].tag  = tag;
+        s_blob_queue[s_blob_queue_len].data = jpeg;
+        s_blob_queue[s_blob_queue_len].size = sz;
+        s_blob_queue_len++;
+    }
+    // Queue full: caller (favourites' periodic refresh/art timer) will
+    // naturally retry later since nothing here holds a slot open for it.
     xSemaphoreGive(s_url_mutex);
+}
+
+void ui_art_blob_invalidate(int tag)
+{
+    if (tag < 0 || tag >= ART_BLOB_SLOTS) return;
+    s_blob_slot[tag].has_content = false;
+}
+
+void ui_art_blob_invalidate_all(void)
+{
+    for (int i = 0; i < ART_BLOB_SLOTS; i++) s_blob_slot[i].has_content = false;
 }
 
 bool ui_art_update(lv_obj_t *img_obj)
@@ -609,11 +671,14 @@ bool ui_art_update(lv_obj_t *img_obj)
     return true;
 }
 
-bool ui_art_update_blob(lv_obj_t *img_obj)
+bool ui_art_update_blob(lv_obj_t *img_obj, int tag)
 {
-    if (!s_new_blob_art || !img_obj) return false;
-    s_new_blob_art = false;
-    lv_img_set_src(img_obj, &s_blob_art_dsc);
+    if (!img_obj || tag < 0 || tag >= ART_BLOB_SLOTS) return false;
+    if (!s_blob_slot[tag].has_content) return false;
+    // Idempotent — safe to call repeatedly for the same tag; a favourite's
+    // slot is never reassigned to a different tag, so there's no staleness
+    // risk in re-applying it.
+    lv_img_set_src(img_obj, &s_blob_slot[tag].dsc);
     return true;
 }
 

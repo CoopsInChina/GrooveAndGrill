@@ -13,6 +13,7 @@
 #include "ui_common.h"
 #include "ui_boot.h"
 #include "ui_art.h"
+#include "ui_favourites.h"
 #include "web_server.h"
 #include "app_config.h"
 
@@ -204,6 +205,14 @@ void app_main(void)
         bbq_ble_init();     // passive observer of the BBQ Box gateway
 
     ui_art_init();
+    // Favourites are already loaded by now (sonos_controller_init() above
+    // reads them from SPIFFS/NVS synchronously) — kick off decoding all of
+    // their art in the background now, rather than waiting for the user
+    // to actually open Favourites, so it's typically already sitting
+    // ready the first time they do. Cheap: favourites are relatively
+    // static, and each one's decode slot is permanent (see ui_art.h) —
+    // this never repeats the work.
+    ui_favourites_prefetch_all();
     weather_init();
     sonos_controller_start_polling();
     wifi_manager_start_monitor();
