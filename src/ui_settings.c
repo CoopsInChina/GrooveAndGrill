@@ -1,6 +1,7 @@
 #include "ui_settings.h"
 #include "ui_common.h"
 #include "app_config.h"
+#include "board_config.h"
 #include "globals.h"
 #include "wifi_manager.h"
 #include "sonos_controller.h"
@@ -12,8 +13,15 @@
 #include <string.h>
 
 // Settings carousel: WiFi | Speaker | BBQ Source | OTA | Screensaver | About
-// Swipe left = next page, swipe right = prev page (or back to menu from About)
-
+// Real horizontal scroll-snap paging (ported from the Favourites carousel —
+// see ui_favourites.c for the underlying LVGL touch-dispatch lessons this
+// reuses: absolute page positioning rather than flex, page containers
+// non-clickable/non-scrollable so the container itself resolves as the
+// touch target, SCROLL_ELASTIC off + press/release edge detection rather
+// than relying on LVGL's own GESTURE recognition, and a scroll_end_cb
+// guard against re-entrant lv_obj_scroll_to_view calls). Wraps at the
+// edges (About -> WiFi and back) rather than exiting, matching the
+// screen's previous hide/show-based behaviour.
 #define PAGE_COUNT  6
 #define PAGE_WIFI           0
 #define PAGE_SPEAKER_SETUP  1
@@ -22,7 +30,8 @@
 #define PAGE_SCREENSAVER    4
 #define PAGE_ABOUT          5
 
-static lv_obj_t *s_scr    = NULL;
+static lv_obj_t *s_scr       = NULL;
+static lv_obj_t *s_container = NULL;
 static int        s_page  = 0;
 static bool       s_gesture_fired = false;
 
@@ -33,34 +42,29 @@ static lv_obj_t *s_ss_val_lbl  = NULL;
 static lv_obj_t *s_pages[PAGE_COUNT] = {0};
 static lv_obj_t *s_dots[PAGE_COUNT]  = {0};
 
-static void show_page(int p)
+static void update_dots(int active)
+{
+    for (int i = 0; i < PAGE_COUNT; i++) {
+        if (s_dots[i])
+            lv_obj_set_style_bg_color(s_dots[i], i == active ? COL_ACCENT : COL_BUTTON, 0);
+    }
+}
+
+// scroll_to: false when called from scroll_end_cb — the container is
+// already physically there (see ui_favourites.c's show_index_impl for why
+// re-scrolling in that case is actively harmful, not just redundant: it
+// re-triggers scroll_begin/end, cascading into a feedback loop).
+static void show_page_impl(int p, bool scroll_to)
 {
     if (p < 0 || p >= PAGE_COUNT) return;
-    for (int i = 0; i < PAGE_COUNT; i++) {
-        if (s_pages[i]) {
-            if (i == p) lv_obj_clear_flag(s_pages[i], LV_OBJ_FLAG_HIDDEN);
-            else        lv_obj_add_flag(s_pages[i], LV_OBJ_FLAG_HIDDEN);
-        }
-        // Update dot colour to reflect active page
-        if (s_dots[i]) {
-            lv_obj_set_style_bg_color(s_dots[i],
-                i == p ? COL_ACCENT : COL_BUTTON, 0);
-        }
-    }
     s_page = p;
+    update_dots(p);
+    if (scroll_to && s_pages[p]) {
+        lv_obj_scroll_to_view(s_pages[p], LV_ANIM_OFF);
+    }
 }
 
-static void go_next(void)
-{
-    if (s_page < PAGE_COUNT - 1) show_page(s_page + 1);
-    else                          show_page(0);
-}
-
-static void go_prev(void)
-{
-    if (s_page > 0) show_page(s_page - 1);
-    else            show_page(PAGE_COUNT - 1);
-}
+static void show_page(int p) { show_page_impl(p, true); }
 
 // A horizontal swipe over a button fires CLICKED too (same touch); the flag
 // suppresses that stray click. But swiping is how you move BETWEEN pages on
@@ -72,25 +76,171 @@ static void go_prev(void)
 // enough that a deliberate tap afterwards always goes through.
 static void gesture_clear_cb(lv_timer_t *t) { (void)t; s_gesture_fired = false; }
 
-static void gesture_cb(lv_event_t *e)
+static void mark_gesture_fired(void)
 {
     s_gesture_fired = true;
     lv_timer_t *t = lv_timer_create(gesture_clear_cb, 400, NULL);
     lv_timer_set_repeat_count(t, 1);
-    ui_handle_gesture(go_next, go_prev, NULL, NULL);
 }
 
-// ---- Page builders -------------------------------------------------
+// ---- Scroll settle / edge-wrap -------------------------------------
 
-static lv_obj_t *make_page(lv_obj_t *parent, const char *title)
+// Set by wrap_to() while its animation is in flight — see that function's
+// comment for the full trick this implements (temporarily relocate the
+// target page next to the current one, animate the short one-page hop,
+// then snap positions back to normal once it visually lands).
+static bool s_wrapping    = false;
+static int  s_wrap_target = -1;
+static void wrap_to(int target);
+
+// container_released_cb records an edge-swipe as PENDING rather than
+// calling wrap_to() directly. Reason: LVGL's own natural throw/settle
+// animation (bringing the container cleanly to rest on the boundary
+// page) isn't created until slightly AFTER the RELEASED event is
+// dispatched — calling wrap_to() synchronously from that handler starts
+// our animation before LVGL's own settle animation even exists on the
+// container, so when that settle animation gets created moments later it
+// can steal/overwrite the same slot, and what actually plays is LVGL's
+// unrelated settle animation instead of ours — by the time it fires
+// scroll_end, wrap_to's cleanup forces everything into place instantly,
+// which read as "wraps correctly but with no animation". Deferring to
+// here, inside the NORMAL settle's own scroll_end, guarantees that
+// settle has fully finished before wrap_to ever touches the container.
+static bool s_pending_wrap        = false;
+static int  s_pending_wrap_target = -1;
+
+static void scroll_end_cb(lv_event_t *e)
+{
+    if (lv_scr_act() != s_scr) return;   // stale/late event after navigating away
+
+    if (s_wrapping) {
+        s_wrapping = false;
+        // The animation just landed on s_pages[s_wrap_target] sitting at
+        // its TEMPORARY slot (immediately adjacent to where we started) —
+        // visually indistinguishable from its real slot from here, since
+        // both the page's own position and the scroll offset move
+        // together in this same tick, before LVGL's next render pass.
+        lv_obj_set_pos(s_pages[s_wrap_target], s_wrap_target * LCD_H_RES, 0);
+        lv_obj_scroll_to_view(s_pages[s_wrap_target], LV_ANIM_OFF);
+        s_page = s_wrap_target;
+        update_dots(s_page);
+        return;
+    }
+
+    lv_coord_t w = lv_obj_get_width(s_container);
+    if (w <= 0) return;
+
+    // Same empirically-derived sign convention as ui_favourites.c's
+    // scroll_end_cb (identical container/hardware setup) — x grows
+    // positive scrolling forward here, not negative as
+    // lv_obj_get_scroll_x's usual convention would suggest.
+    lv_coord_t x = lv_obj_get_scroll_x(s_container);
+    int p = (int)((x + w / 2) / w);
+    if (p < 0) p = 0;
+    if (p >= PAGE_COUNT) p = PAGE_COUNT - 1;
+
+    show_page_impl(p, false);
+
+    if (s_pending_wrap) {
+        s_pending_wrap = false;
+        wrap_to(s_pending_wrap_target);
+    }
+}
+
+static void scroll_begin_cb(lv_event_t *e)
+{
+    mark_gesture_fired();
+}
+
+// Wrap-around edge detection, independent of LVGL's own GESTURE system —
+// see ui_favourites.c's gesture_cb comment for why that doesn't work here:
+// SCROLL_ELASTIC (or even just "has room in the other direction") claims
+// the touch as a scroll before a GESTURE event can ever fire at a
+// boundary. Track raw press/release x instead.
+#define EDGE_WRAP_SWIPE_PX 80
+static lv_coord_t s_press_x = 0;
+
+static void container_pressed_cb(lv_event_t *e)
+{
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev) return;
+    lv_point_t pt;
+    lv_indev_get_point(indev, &pt);
+    s_press_x = pt.x;
+}
+
+// A literal scroll_to_view(ANIM_ON) here would animate straight across
+// every page in between (About -> WiFi visibly sweeps past Screensaver,
+// OTA, BBQ, Speaker) — a fast, disorienting blur, not a wrap. Real
+// circular scrolling isn't something LVGL's linear container does
+// natively, so this fakes it: relocate the target page to sit ONE page-
+// width beyond whichever edge we're leaving from (immediately adjacent
+// to the current page, not its usual absolute slot), animate that short
+// hop like a completely normal swipe, then let scroll_end_cb's
+// s_wrapping branch snap it back to its real slot the instant the
+// animation lands — imperceptible, since the page is already sitting in
+// the same screen position at that moment.
+static void wrap_to(int target)
+{
+    if (target < 0 || target >= PAGE_COUNT) return;
+    if (!s_pages[target]) return;
+    mark_gesture_fired();
+
+    // scroll_to_view internally deletes any pending scroll animation on
+    // the container BEFORE starting its own — and if one still existed
+    // (very plausible: releasing a swipe that both lands on the boundary
+    // page and immediately registers as a wrap can catch that page's own
+    // settle-snap animation still finishing), deleting it fires a
+    // synchronous SCROLL_END right there, before the real animated
+    // scroll below even starts. s_wrapping was already true by then, so
+    // scroll_end_cb treated that premature event as "landed" and did the
+    // whole snap-back instantly — the wrap jumped correctly but with no
+    // visible animation, since it was actually done before this
+    // function even returned. Clearing it here, before arming
+    // s_wrapping, means that internal delete finds nothing to fire on.
+    lv_anim_del(s_container, NULL);
+
+    int temp_index = (target == 0) ? PAGE_COUNT : -1;
+    lv_obj_set_pos(s_pages[target], temp_index * LCD_H_RES, 0);
+
+    s_wrapping    = true;
+    s_wrap_target = target;
+    lv_obj_scroll_to_view(s_pages[target], LV_ANIM_ON);
+}
+
+static void container_released_cb(lv_event_t *e)
+{
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev) return;
+    lv_point_t pt;
+    lv_indev_get_point(indev, &pt);
+    lv_coord_t dx = pt.x - s_press_x;
+
+    // Deferred to scroll_end_cb, not called directly — see s_pending_wrap's
+    // comment for why.
+    if (s_page == 0 && dx > EDGE_WRAP_SWIPE_PX) {
+        s_pending_wrap        = true;
+        s_pending_wrap_target = PAGE_COUNT - 1;
+    } else if (s_page == PAGE_COUNT - 1 && dx < -EDGE_WRAP_SWIPE_PX) {
+        s_pending_wrap        = true;
+        s_pending_wrap_target = 0;
+    }
+}
+
+static lv_obj_t *make_page(lv_obj_t *parent, int index, const char *title)
 {
     lv_obj_t *p = lv_obj_create(parent);
-    lv_obj_set_size(p, LV_PCT(100), LV_PCT(100));
-    lv_obj_center(p);
+    lv_obj_set_pos(p, index * LCD_H_RES, 0);
+    lv_obj_set_size(p, LCD_H_RES, LCD_V_RES);
     lv_obj_set_style_bg_opa(p, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(p, 0, 0);
     lv_obj_set_style_pad_all(p, 0, 0);
-    lv_obj_clear_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+    // Non-clickable/non-scrollable: touch dispatch should resolve to
+    // s_container (the real scroll target), not this intermediate page —
+    // see ui_favourites.c's build_pages comment for the full explanation
+    // (every LVGL object defaults to CLICKABLE=true, which without this
+    // makes the page itself the resolved "pressed object" instead).
+    lv_obj_clear_flag(p, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t *lbl = lv_label_create(p);
     lv_label_set_text(lbl, title);
@@ -451,6 +601,10 @@ static void ss_make_row(lv_obj_t *parent, const char *text, int cy,
 
     lv_obj_t *sw = lv_switch_create(row);
     lv_obj_set_size(sw, 52, 28);
+    // Same reasoning as ss_make_slider's SCROLL_CHAIN clear — a switch
+    // supports a small drag-to-toggle too, which without this could get
+    // claimed as a page swipe instead.
+    lv_obj_clear_flag(sw, LV_OBJ_FLAG_SCROLL_CHAIN);
     if (checked) lv_obj_add_state(sw, LV_STATE_CHECKED);
     lv_obj_set_style_bg_color(sw, COL_BUTTON, LV_PART_MAIN);
     lv_obj_set_style_bg_color(sw, COL_ACCENT, LV_PART_MAIN | LV_STATE_CHECKED);
@@ -465,9 +619,13 @@ static lv_obj_t *ss_make_slider(lv_obj_t *parent, int min, int max, int val,
     lv_obj_t *sl = lv_slider_create(parent);
     lv_obj_set_size(sl, 260, 12);
     lv_obj_align(sl, LV_ALIGN_CENTER, 0, cy);
-    // Sliders bubble gestures to the parent by default, so a drag also gets
-    // read as a screen swipe and flips to the next/prev settings page mid-drag.
-    lv_obj_clear_flag(sl, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    // Paging is real LVGL scrolling now, not GESTURE events (see
+    // ui_favourites.c) — a slider isn't itself scrollable, so without this
+    // its own drag search would walk straight up to s_container and get
+    // claimed as a page swipe instead of moving the slider. SCROLL_CHAIN
+    // is what stops that upward search (the GESTURE_BUBBLE clear this
+    // used to be doesn't apply to real scroll dispatch at all).
+    lv_obj_clear_flag(sl, LV_OBJ_FLAG_SCROLL_CHAIN);
     lv_slider_set_range(sl, min, max);
     lv_slider_set_value(sl, val, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(sl, COL_PANEL,  LV_PART_MAIN);
@@ -516,26 +674,39 @@ lv_obj_t *ui_settings_create(void)
     s_page = 0;
     s_scr = lv_obj_create(NULL);
     ui_screen_base_style(s_scr);
-    lv_obj_add_event_cb(s_scr, gesture_cb, LV_EVENT_GESTURE, NULL);
 
-    // Order matches the PAGE_* indices above (About moved to the end).
+    // Horizontal scroll-snap row — see ui_favourites.c's ui_favourites_create
+    // for the full reasoning behind each of these flags/handlers.
+    s_container = lv_obj_create(s_scr);
+    lv_obj_set_size(s_container, LCD_H_RES, LCD_V_RES);
+    lv_obj_set_pos(s_container, 0, 0);
+    lv_obj_set_style_bg_opa(s_container, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_container, 0, 0);
+    lv_obj_set_style_pad_all(s_container, 0, 0);
+    lv_obj_set_scrollbar_mode(s_container, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_scroll_dir(s_container, LV_DIR_HOR);
+    lv_obj_set_scroll_snap_x(s_container, LV_SCROLL_SNAP_CENTER);
+    lv_obj_clear_flag(s_container, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_add_flag(s_container, LV_OBJ_FLAG_SCROLL_ONE);
+    lv_obj_add_event_cb(s_container, scroll_end_cb,   LV_EVENT_SCROLL_END,   NULL);
+    lv_obj_add_event_cb(s_container, scroll_begin_cb, LV_EVENT_SCROLL_BEGIN, NULL);
+    lv_obj_add_event_cb(s_container, container_pressed_cb,  LV_EVENT_PRESSED,  NULL);
+    lv_obj_add_event_cb(s_container, container_released_cb, LV_EVENT_RELEASED, NULL);
+
     static const char *titles[PAGE_COUNT] = {
         "WiFi", "Speaker", "BBQ Source", "OTA Update", "Screensaver", "About"
     };
 
-    s_pages[PAGE_ABOUT]         = make_page(s_scr, titles[PAGE_ABOUT]);
-    s_pages[PAGE_WIFI]          = make_page(s_scr, titles[PAGE_WIFI]);
-    s_pages[PAGE_SPEAKER_SETUP] = make_page(s_scr, titles[PAGE_SPEAKER_SETUP]);
-    s_pages[PAGE_BBQ_SOURCE]    = make_page(s_scr, titles[PAGE_BBQ_SOURCE]);
-    s_pages[PAGE_OTA]           = make_page(s_scr, titles[PAGE_OTA]);
-    s_pages[PAGE_SCREENSAVER]   = make_page(s_scr, titles[PAGE_SCREENSAVER]);
+    for (int i = 0; i < PAGE_COUNT; i++) {
+        s_pages[i] = make_page(s_container, i, titles[i]);
+    }
 
-    build_about_page(s_pages[PAGE_ABOUT]);
     build_wifi_page(s_pages[PAGE_WIFI]);
     build_speaker_page(s_pages[PAGE_SPEAKER_SETUP]);
     build_bbq_source_page(s_pages[PAGE_BBQ_SOURCE]);
     build_ota_page(s_pages[PAGE_OTA]);
     build_screensaver_page(s_pages[PAGE_SCREENSAVER]);
+    build_about_page(s_pages[PAGE_ABOUT]);
 
     // Page dots indicator — saved so show_page() can recolour them
     lv_obj_t *dots_cont = lv_obj_create(s_scr);
