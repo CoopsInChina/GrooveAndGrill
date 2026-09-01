@@ -74,6 +74,25 @@ void app_main(void)
     ESP_ERROR_CHECK(tca9554_init());
     buzzer_init();   // onboard buzzer via the expander (pin 8) — needs I2C up
 
+    // ── BLE — before display_init() ──────────────────────────────────
+    // esp_bt_controller_init/enable (run inside bbq_ble_init()/ble_probe_init()
+    // via nimble_port_init()) was landing at the same wall-clock moment the
+    // display's first real screen was being vsync-swap-flushed, causing a
+    // visible torn/ghosted frame at boot. There's nothing for it to race
+    // against if the display doesn't exist yet, so BLE now starts here.
+    // Also needs a large contiguous block of internal DRAM at init — doing
+    // this before display/WiFi-wait/Sonos/web-server have allocated
+    // anything gives it the best possible shot at that (this same DRAM-
+    // contiguity concern used to motivate running BLE right before the
+    // other background tasks, much later; this is strictly earlier).
+    // bbq_controller_init() loads the persisted source mode (box vs. direct
+    // probe) from NVS, which bbq_source_get() below depends on.
+    bbq_controller_init();
+    if (bbq_source_get() == BBQ_SRC_PROBE)
+        ble_probe_init();   // GATT central to one wireless probe
+    else
+        bbq_ble_init();     // passive observer of the BBQ Box gateway
+
     // Display + LVGL task — runs while WiFi connects in background
     ESP_ERROR_CHECK(display_init());
     display_set_backlight(true);
@@ -123,7 +142,6 @@ void app_main(void)
     }
 
     sonos_controller_init();
-    bbq_controller_init();
     bool sonos_ok = false;
     if (wifi_ok) {
         sonos_ok = sonos_controller_discover(SONOS_DISCOVERY_TIMEOUT_MS);
@@ -191,18 +209,7 @@ void app_main(void)
     }
 
     // ── Background tasks ──────────────────────────────────────────────
-    // BLE first: the controller needs a large contiguous block of internal
-    // DRAM at init. Spawning the Sonos/art/weather tasks beforehand fragments
-    // DRAM enough that esp_bt_controller_init() fails with "Malloc failed".
-    // WiFi is already up, so coexistence is handled from here on.
-    // One NimBLE stack, chosen by the saved source mode: observe the BBQ Box,
-    // or connect directly to a single wireless probe. Switching modes reboots
-    // (see bbq_source_set), so this runs once per boot.
-    if (bbq_source_get() == BBQ_SRC_PROBE)
-        ble_probe_init();   // GATT central to one wireless probe
-    else
-        bbq_ble_init();     // passive observer of the BBQ Box gateway
-
+    // BLE was already started earlier, before display_init() — see there.
     ui_art_init();
     weather_init();
     sonos_controller_start_polling();
