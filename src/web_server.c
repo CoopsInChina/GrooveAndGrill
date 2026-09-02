@@ -10,7 +10,6 @@
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "esp_system.h"
-#include "esp_log.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -488,7 +487,7 @@ static esp_err_t play_post_handler(httpd_req_t *req)
     if (p) idx = atoi(p + 4);
     if (idx >= 0 && idx < sonos_favourites_count()) {
         sonos_play_favourite((uint8_t)idx);
-        ESP_LOGI(TAG, "Web play: %d (%s)", idx, sonos_favourite_name(idx));
+        LOGI(TAG, "Web play: %d (%s)", idx, sonos_favourite_name(idx));
     }
     httpd_resp_set_status(req, "303 See Other");
     httpd_resp_set_hdr(req, "Location", "/setup");
@@ -530,9 +529,9 @@ static esp_err_t add_structured_handler(httpd_req_t *req)
         build_cmd_from_structured(source, type, id, cmd, sizeof(cmd), name, sizeof(name))) {
         ok = sonos_add_device_favourite(name, cmd);
         if (ok) new_idx = sonos_device_fav_count() - 1;
-        ESP_LOGI(TAG, "Add structured '%s' → %s: %s (idx=%d)", name, cmd, ok ? "ok" : "full", new_idx);
+        LOGI(TAG, "Add structured '%s' → %s: %s (idx=%d)", name, cmd, ok ? "ok" : "full", new_idx);
     } else {
-        ESP_LOGW(TAG, "add_structured: bad fields src=%s typ=%s id=%s", source, type, id);
+        LOGW(TAG, "add_structured: bad fields src=%s typ=%s id=%s", source, type, id);
     }
     char resp[48];
     snprintf(resp, sizeof(resp), "{\"ok\":%s,\"idx\":%d}", ok ? "true" : "false", new_idx);
@@ -560,9 +559,9 @@ static esp_err_t add_by_url_handler(httpd_req_t *req)
     if (url[0] && build_cmd_from_url(url, cmd, sizeof(cmd), name, sizeof(name))) {
         ok = sonos_add_device_favourite(name, cmd);
         if (ok) new_idx = sonos_device_fav_count() - 1;
-        ESP_LOGI(TAG, "Add URL '%s' → %s: %s (idx=%d)", name, cmd, ok ? "ok" : "full", new_idx);
+        LOGI(TAG, "Add URL '%s' → %s: %s (idx=%d)", name, cmd, ok ? "ok" : "full", new_idx);
     } else {
-        ESP_LOGW(TAG, "add_by_url: unrecognised URL: %.80s", url);
+        LOGW(TAG, "add_by_url: unrecognised URL: %.80s", url);
     }
     char resp[48];
     snprintf(resp, sizeof(resp), "{\"ok\":%s,\"idx\":%d}", ok ? "true" : "false", new_idx);
@@ -583,7 +582,7 @@ static esp_err_t del_custom_handler(httpd_req_t *req)
     if (p) idx = atoi(p + 4);
     if (idx >= 0) {
         bool ok = sonos_remove_device_favourite(idx);
-        ESP_LOGI(TAG, "Del custom[%d]: %s", idx, ok ? "ok" : "bad index");
+        LOGI(TAG, "Del custom[%d]: %s", idx, ok ? "ok" : "bad index");
     }
     httpd_resp_set_status(req, "303 See Other");
     httpd_resp_set_hdr(req, "Location", "/setup");
@@ -628,7 +627,7 @@ static esp_err_t upload_art_handler(httpd_req_t *req)
 
     bool ok = sonos_set_device_fav_art(idx, buf, (size_t)received);
     heap_caps_free(buf);
-    ESP_LOGI(TAG, "upload_art idx=%d size=%d ok=%d", idx, received, ok);
+    LOGI(TAG, "upload_art idx=%d size=%d ok=%d", idx, received, ok);
 
     char resp[32];
     snprintf(resp, sizeof(resp), "{\"ok\":%s}", ok ? "true" : "false");
@@ -723,7 +722,7 @@ static esp_err_t bbq_assign_handler(httpd_req_t *req)
 
     bbq_sensor_assign((sensor_src_t)src, (uint8_t)hw, (uint8_t)grill,
                       (sensor_role_t)role, (meat_kind_t)kind, target);
-    ESP_LOGI(TAG, "assign src=%d hw=%d -> grill=%d role=%d kind=%d target=%d",
+    LOGI(TAG, "assign src=%d hw=%d -> grill=%d role=%d kind=%d target=%d",
              src, hw, grill, role, kind, target);
 
     httpd_resp_set_type(req, "application/json");
@@ -747,7 +746,7 @@ static esp_err_t bbq_source_handler(httpd_req_t *req)
     form_field(body, "mode", v, sizeof(v));
     bbq_source_t mode = (atoi(v) == BBQ_SRC_PROBE) ? BBQ_SRC_PROBE : BBQ_SRC_BOX;
     bbq_source_set(mode);
-    ESP_LOGI(TAG, "web: BBQ source -> %d, rebooting", (int)mode);
+    LOGI(TAG, "web: BBQ source -> %d, rebooting", (int)mode);
 
     httpd_resp_set_type(req, "application/json");
     esp_err_t r = httpd_resp_sendstr(req, "{\"ok\":true}");   // flush before restarting
@@ -954,7 +953,7 @@ bool web_server_start(void)
     cfg.recv_wait_timeout = 30;   // seconds — needed for 25KB art upload
 
     if (httpd_start(&s_server, &cfg) != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start HTTP server");
+        LOGE(TAG, "Failed to start HTTP server");
         return false;
     }
 
@@ -976,7 +975,7 @@ bool web_server_start(void)
     for (int i = 0; i < (int)(sizeof(uris) / sizeof(uris[0])); i++)
         httpd_register_uri_handler(s_server, &uris[i]);
 
-    ESP_LOGI(TAG, "Setup server: http://%s/setup", wifi_manager_ip());
+    LOGI(TAG, "Setup server: http://%s/setup", wifi_manager_ip());
     return true;
 }
 

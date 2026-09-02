@@ -15,7 +15,7 @@
 #include "ui_widgets.h"
 #include "ui_reboot.h"
 
-#include "esp_log.h"
+#include "app_log.h"
 
 static const char *TAG = "ui_common";
 
@@ -52,7 +52,7 @@ static void navigate_to_impl(screen_id_t id, lv_scr_load_anim_t anim)
     if (!s_screens[id]) {
         s_screens[id] = s_create_fns[id]();
         if (!s_screens[id]) {
-            ESP_LOGE(TAG, "Failed to create screen %d", id);
+            LOGE(TAG, "Failed to create screen %d", id);
             return;
         }
     }
@@ -76,7 +76,7 @@ static void navigate_to_impl(screen_id_t id, lv_scr_load_anim_t anim)
     // when LVGL objects are created, so log LVGL's own pool instead.
     lv_mem_monitor_t mon;
     lv_mem_monitor(&mon);
-    ESP_LOGI(TAG, "Navigate -> screen %d (%s) — LVGL pool: %u%% used, %u%% frag, "
+    LOGI(TAG, "Navigate -> screen %d (%s) — LVGL pool: %u%% used, %u%% frag, "
              "free: %u bytes (biggest block: %u)",
              id, first_visit ? "first visit, just created" : "cached",
              mon.used_pct, mon.frag_pct, (unsigned)mon.free_size,

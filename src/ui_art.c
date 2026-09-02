@@ -16,7 +16,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_attr.h"     // EXT_RAM_BSS_ATTR
-#include "esp_log.h"
+#include "app_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -157,13 +157,13 @@ static lv_color_t *decode_jpeg(const uint8_t *data, size_t len, int *out_w, int 
     JDEC jd;
     JRESULT r = jd_prepare(&jd, jpg_infunc, s_tjpgd_pool, sizeof(s_tjpgd_pool), &ctx);
     if (r != JDR_OK) {
-        ESP_LOGW(TAG, "jd_prepare failed: %d", (int)r);
+        LOGW(TAG, "jd_prepare failed: %d", (int)r);
         return NULL;
     }
 
     int w = (int)jd.width, h = (int)jd.height;
     if (w <= 0 || h <= 0 || w > 2048 || h > 2048) {
-        ESP_LOGW(TAG, "JPEG dims invalid: %dx%d", w, h);
+        LOGW(TAG, "JPEG dims invalid: %dx%d", w, h);
         return NULL;
     }
 
@@ -171,7 +171,7 @@ static lv_color_t *decode_jpeg(const uint8_t *data, size_t len, int *out_w, int 
     lv_color_t *buf = (lv_color_t *)heap_caps_malloc(buf_bytes,
                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) {
-        ESP_LOGE(TAG, "decode buf alloc failed (%u B)", (unsigned)buf_bytes);
+        LOGE(TAG, "decode buf alloc failed (%u B)", (unsigned)buf_bytes);
         return NULL;
     }
 
@@ -181,14 +181,14 @@ static lv_color_t *decode_jpeg(const uint8_t *data, size_t len, int *out_w, int 
 
     r = jd_decomp(&jd, jpg_outfunc, 0 /* scale=1:1 */);
     if (r != JDR_OK) {
-        ESP_LOGW(TAG, "jd_decomp failed: %d", (int)r);
+        LOGW(TAG, "jd_decomp failed: %d", (int)r);
         heap_caps_free(buf);
         return NULL;
     }
 
     *out_w = w;
     *out_h = h;
-    ESP_LOGI(TAG, "decoded %dx%d (%u KB)", w, h, (unsigned)(buf_bytes / 1024));
+    LOGI(TAG, "decoded %dx%d (%u KB)", w, h, (unsigned)(buf_bytes / 1024));
     return buf;
 }
 
@@ -400,7 +400,7 @@ static size_t download_url(const char *url, uint8_t *buf, size_t buf_sz)
     esp_http_client_cleanup(c);
 
     if (err != ESP_OK || status != 200) {
-        ESP_LOGW(TAG, "download err=%d status=%d", (int)err, status);
+        LOGW(TAG, "download err=%d status=%d", (int)err, status);
         return 0;
     }
     return ctx.total;
@@ -413,7 +413,7 @@ static void art_task(void *arg)
     uint8_t *dl_buf = (uint8_t *)heap_caps_malloc(ART_DOWNLOAD_BYTES,
                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!dl_buf) {
-        ESP_LOGE(TAG, "dl_buf alloc failed — art disabled");
+        LOGE(TAG, "dl_buf alloc failed — art disabled");
         vTaskDelete(NULL);
         return;
     }
@@ -423,7 +423,7 @@ static void art_task(void *arg)
         s_cache[i].pixels = (uint16_t *)heap_caps_malloc(ART_PIXEL_BUF_BYTES,
                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!s_cache[i].pixels)
-            ESP_LOGE(TAG, "cache[%d] alloc failed", i);
+            LOGE(TAG, "cache[%d] alloc failed", i);
     }
 
     static char url[512];
@@ -463,16 +463,16 @@ static void art_task(void *arg)
         if (blob) {
             src_data = blob;
             src_len  = blob_sz;
-            ESP_LOGI(TAG, "blob art: %zu bytes", src_len);
+            LOGI(TAG, "blob art: %zu bytes", src_len);
         } else {
-            ESP_LOGI(TAG, "requesting: %s", url);
+            LOGI(TAG, "requesting: %s", url);
 
             // LRU cache check
             bool cache_hit = false;
             for (int i = 0; i < ART_CACHE_SLOTS; i++) {
                 if (s_cache[i].valid && s_cache[i].pixels &&
                     strncmp(s_cache[i].url, url, sizeof(s_cache[i].url)) == 0) {
-                    ESP_LOGI(TAG, "cache hit slot %d", i);
+                    LOGI(TAG, "cache hit slot %d", i);
                     memcpy(s_work_buf, s_cache[i].pixels, ART_PIXEL_BUF_BYTES);
                     uint32_t dom = s_cache[i].dominant;
                     s_cache_lru = i;
@@ -495,7 +495,7 @@ static void art_task(void *arg)
                 dl_len = download_url(url, dl_buf, ART_DOWNLOAD_BYTES);
                 xSemaphoreGive(g_network_mutex);
             } else {
-                ESP_LOGW(TAG, "network mutex timeout");
+                LOGW(TAG, "network mutex timeout");
                 xSemaphoreTake(s_url_mutex, portMAX_DELAY);
                 s_current[0] = '\0';
                 xSemaphoreGive(s_url_mutex);
@@ -503,7 +503,7 @@ static void art_task(void *arg)
                 continue;
             }
             if (dl_len < 3) {
-                ESP_LOGW(TAG, "download failed or empty");
+                LOGW(TAG, "download failed or empty");
                 xSemaphoreTake(s_url_mutex, portMAX_DELAY);
                 s_current[0] = '\0';
                 xSemaphoreGive(s_url_mutex);
@@ -516,7 +516,7 @@ static void art_task(void *arg)
 
         // Verify JPEG magic (\xFF\xD8)
         if (src_len < 3 || src_data[0] != 0xFF || src_data[1] != 0xD8) {
-            ESP_LOGW(TAG, "not JPEG (got %02x %02x)", src_data[0], src_data[1]);
+            LOGW(TAG, "not JPEG (got %02x %02x)", src_data[0], src_data[1]);
             continue;
         }
 
@@ -529,7 +529,7 @@ static void art_task(void *arg)
         scale_bilinear((const uint16_t *)decoded, iw, ih, iw,
                        s_work_buf, ART_SIZE, ART_SIZE);
         heap_caps_free(decoded);
-        ESP_LOGI(TAG, "scaled %dx%d → %dx%d", iw, ih, ART_SIZE, ART_SIZE);
+        LOGI(TAG, "scaled %dx%d → %dx%d", iw, ih, ART_SIZE, ART_SIZE);
 
         // ── Dominant colour ───────────────────────────────────────────────────
         uint32_t dom = sample_dominant_color(s_work_buf, ART_SIZE, ART_SIZE);
@@ -567,7 +567,7 @@ static void art_task(void *arg)
                         s_blob_slot[blob_tag].dsc.data_size = ART_PIXEL_BUF_BYTES;
                         s_blob_slot[blob_tag].dsc.data      = (const uint8_t *)s_blob_slot[blob_tag].buf;
                     } else {
-                        ESP_LOGE(TAG, "blob slot %d alloc failed — leaving uncached", blob_tag);
+                        LOGE(TAG, "blob slot %d alloc failed — leaving uncached", blob_tag);
                     }
                 }
                 if (s_blob_slot[blob_tag].buf) {
@@ -598,7 +598,7 @@ void ui_art_init(void)
     s_work_buf = (uint16_t *)heap_caps_calloc(ART_PIXEL_BUF_BYTES, 1,
                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_disp_buf || !s_work_buf)
-        ESP_LOGE(TAG, "art buf alloc failed");
+        LOGE(TAG, "art buf alloc failed");
 
     // Seed URL descriptor — data pointer filled in on first ui_art_update()
     memset(&s_art_dsc, 0, sizeof(s_art_dsc));
@@ -616,7 +616,7 @@ void ui_art_init(void)
 
     // Pin art task to core 1 (LVGL runs on core 0) to avoid blocking the UI.
     xTaskCreatePinnedToCore(art_task, "ui_art", ART_TASK_STACK, NULL, 2, NULL, 1);
-    ESP_LOGI(TAG, "init OK  disp=%p work=%p", (void*)s_disp_buf, (void*)s_work_buf);
+    LOGI(TAG, "init OK  disp=%p work=%p", (void*)s_disp_buf, (void*)s_work_buf);
 }
 
 void ui_art_request(const char *raw_url)

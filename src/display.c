@@ -2,7 +2,7 @@
 #include "board_config.h"
 #include "tca9554.h"
 
-#include "esp_log.h"
+#include "app_log.h"
 #include "driver/spi_master.h"
 #include "driver/ledc.h"
 #include "esp_lcd_panel_ops.h"
@@ -230,7 +230,7 @@ esp_err_t display_init(void)
     tca9554_set_pin(TCA_PIN_LCD_CS, false);   // assert CS
     st7701_send_init_cmds();
     tca9554_set_pin(TCA_PIN_LCD_CS, true);    // deassert CS
-    ESP_LOGI(TAG, "ST7701S init done");
+    LOGI(TAG, "ST7701S init done");
 
     // 3. Backlight (off until ComfortEnable turns it on)
     backlight_init();
@@ -315,11 +315,11 @@ esp_err_t display_init(void)
     };
     lv_disp_t *disp = lvgl_port_add_disp_rgb(&disp_cfg, &lvgl_rgb_cfg);
     if (!disp) {
-        ESP_LOGE(TAG, "lvgl_port_add_disp_rgb failed");
+        LOGE(TAG, "lvgl_port_add_disp_rgb failed");
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "LVGL display ready (%dx%d)", LCD_H_RES, LCD_V_RES);
+    LOGI(TAG, "LVGL display ready (%dx%d)", LCD_H_RES, LCD_V_RES);
     return ESP_OK;
 }
 

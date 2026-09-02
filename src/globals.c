@@ -3,7 +3,7 @@
 #include "display.h"
 #include "nvs.h"
 #include "esp_heap_caps.h"
-#include "esp_log.h"
+#include "app_log.h"
 #include "esp_timer.h"
 #include "lvgl.h"
 #include <string.h>
@@ -42,14 +42,14 @@ void globals_init(void)
 {
     g_network_mutex = xSemaphoreCreateMutex();
     if (!g_network_mutex) {
-        ESP_LOGE(TAG, "Failed to create network mutex");
+        LOGE(TAG, "Failed to create network mutex");
     }
 
     g_last_touch_ms = now_ms();
 
     nvs_handle_t nvs;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) {
-        ESP_LOGI(TAG, "No saved globals — using defaults");
+        LOGI(TAG, "No saved globals — using defaults");
         return;
     }
 
@@ -70,7 +70,7 @@ void globals_init(void)
 
     nvs_close(nvs);
 
-    ESP_LOGI(TAG, "Loaded: brightness=%d autodim=%ds api=%s",
+    LOGI(TAG, "Loaded: brightness=%d autodim=%ds api=%s",
              g_brightness, g_autodim_sec, g_api_server[0] ? g_api_server : "(none)");
 }
 
@@ -133,7 +133,7 @@ void globals_check_autodim(void)
     if (elapsed < (uint32_t)(g_autodim_sec * 1000)) return;
 
     g_screen_dimmed = true;
-    ESP_LOGI(TAG, "Autodim: fading to %d%%", g_brightness_dimmed);
+    LOGI(TAG, "Autodim: fading to %d%%", g_brightness_dimmed);
 
     // lv_anim_start() touches LVGL internals — must hold the display lock.
     // Called from timer task context, so use a short timeout rather than blocking.

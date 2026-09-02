@@ -7,7 +7,7 @@
 #include "app_config.h"
 #include "board_config.h"
 #include "lvgl.h"
-#include "esp_log.h"
+#include "app_log.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -277,7 +277,7 @@ static void scroll_end_cb(lv_event_t *e)
     if (index < 0) index = 0;
     if (index >= s_page_count) index = s_page_count - 1;
 
-    ESP_LOGI("fav", "scroll_end: x=%d w=%d page_count=%d -> index=%d (was %d)",
+    LOGD("fav", "scroll_end: x=%d w=%d page_count=%d -> index=%d (was %d)",
              (int)x, (int)w, s_page_count, index, s_index);
 
     // false: the container is already physically here — see show_index_impl.
@@ -286,7 +286,7 @@ static void scroll_end_cb(lv_event_t *e)
 
 static void scroll_begin_cb(lv_event_t *e)
 {
-    ESP_LOGI("fav", "scroll_begin fired on %p (s_container=%p)",
+    LOGD("fav", "scroll_begin fired on %p (s_container=%p)",
              lv_event_get_target(e), s_container);
 }
 

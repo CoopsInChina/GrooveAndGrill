@@ -19,7 +19,6 @@
 #include "app_config.h"
 
 #include "nvs_flash.h"
-#include "esp_log.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
 #include "esp_sntp.h"
@@ -51,7 +50,7 @@ static void ntp_sync_cb(struct timeval *tv)
 {
     (void)tv;
     g_ntp_synced = true;
-    ESP_LOGI(TAG, "NTP synced");
+    LOGI(TAG, "NTP synced");
 }
 
 static void autodim_timer_cb(TimerHandle_t t)
@@ -115,9 +114,9 @@ void app_main(void)
     // real capability flags so this is actually trustworthy for diagnosing
     // internal-DRAM pressure (see e.g. the poll_task/cmd_task DRAM
     // exhaustion this was supposed to help catch).
-    ESP_LOGI(TAG, "=== MEMORY MAP (post-display, pre-WiFi-wait) ===");
-    ESP_LOGI(TAG, "  DRAM free:  %u bytes", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-    ESP_LOGI(TAG, "  PSRAM free: %u bytes", (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    LOGI(TAG, "=== MEMORY MAP (post-display, pre-WiFi-wait) ===");
+    LOGI(TAG, "  DRAM free:  %u bytes", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    LOGI(TAG, "  PSRAM free: %u bytes", (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
     // ── Wait for WiFi ─────────────────────────────────────────────────
     if (display_lock(500)) {
@@ -142,7 +141,7 @@ void app_main(void)
         ui_boot_set_icon(BOOT_ICON_WIFI, wifi_ok ? BOOT_STATE_OK : BOOT_STATE_FAIL);
         display_unlock();
     }
-    ESP_LOGI(TAG, "WiFi: %s", wifi_ok ? wifi_manager_ssid() : "not connected");
+    LOGI(TAG, "WiFi: %s", wifi_ok ? wifi_manager_ssid() : "not connected");
     BOOT_TEAR_WORKAROUND_DELAY();
 
     // ── Sonos discovery ───────────────────────────────────────────────
@@ -170,7 +169,7 @@ void app_main(void)
         ui_boot_set_icon(BOOT_ICON_SONOS, sonos_ok ? BOOT_STATE_OK : BOOT_STATE_FAIL);
         display_unlock();
     }
-    ESP_LOGI(TAG, "Sonos: %s", sonos_ok ? sonos_active_speaker_name() : "not found");
+    LOGI(TAG, "Sonos: %s", sonos_ok ? sonos_active_speaker_name() : "not found");
     BOOT_TEAR_WORKAROUND_DELAY();
 
     // ── node-sonos-http-api discovery ────────────────────────────────
@@ -200,8 +199,8 @@ void app_main(void)
         ui_boot_set_icon(BOOT_ICON_SERVER, srv_ok ? BOOT_STATE_OK : BOOT_STATE_FAIL);
         display_unlock();
     }
-    ESP_LOGI(TAG, "API server: %s", api_ok ? g_api_server : "scanning in background");
-    ESP_LOGI(TAG, "Setup server: %s", srv_ok ? "running" : "failed");
+    LOGI(TAG, "API server: %s", api_ok ? g_api_server : "scanning in background");
+    LOGI(TAG, "Setup server: %s", srv_ok ? "running" : "failed");
 
     // Hold boot screen so user can read the status dots
     vTaskDelay(pdMS_TO_TICKS(2000));
@@ -256,6 +255,6 @@ void app_main(void)
                                                pdTRUE, NULL, autodim_timer_cb);
     if (autodim_timer) xTimerStart(autodim_timer, 0);
 
-    ESP_LOGI(TAG, "Groove & Grill v%s running — heap: %lu free",
+    LOGI(TAG, "Groove & Grill v%s running — heap: %lu free",
              FIRMWARE_VERSION, (unsigned long)esp_get_free_heap_size());
 }
