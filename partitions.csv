@@ -8,3 +8,6 @@ otadata,    data, ota,      0xF000,    0x2000
 ota_0,      app,  ota_0,    0x20000,   0x3E0000
 ota_1,      app,  ota_1,    0x400000,  0x3E0000
 art_cache,  data, spiffs,   0x7E0000,  0x200000
+# Raw (no filesystem) sector-aligned ring buffer of WARN/ERROR log lines —
+# see src/app_log.c. ~6 MB still unallocated after this on the 16 MB flash.
+fault_log,  data, 0x40,     0x9E0000,  0x20000

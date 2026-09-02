@@ -96,7 +96,7 @@ void ui_boot_set_status(const char *msg, int progress_pct)
     (void)progress_pct;
     if (!s_scr) return;
     if (s_status) lv_label_set_text(s_status, msg);
-    lv_refr_now(NULL);
+    // No lv_refr_now() here — see ui_boot_set_icon()'s comment.
 }
 
 void ui_boot_set_icon(int idx, int state)
@@ -109,5 +109,19 @@ void ui_boot_set_icon(int idx, int state)
         default:              col = lv_color_hex(0x444444);      break;
     }
     if (s_icon[idx]) lv_obj_set_style_text_color(s_icon[idx], col, 0);
-    lv_refr_now(NULL);
+    // lv_refr_now() forces the whole redraw+flush pipeline (including the
+    // RGB panel's esp_lcd_panel_draw_bitmap()+vsync-wait semaphore) to run
+    // synchronously on THIS task (app_main) instead of the dedicated
+    // lvgl_port_task that's supposed to own all rendering. display_lock()/
+    // display_unlock() only protect LVGL's data structures from concurrent
+    // modification — they don't make it safe to drive the flush pipeline
+    // from a second task. Every other screen in this app goes through
+    // lv_scr_load_anim()/ui_navigate_to(), which the port task's own timer
+    // picks up on its own; this boot screen was the only caller forcing a
+    // foreign-task flush, and is the likely cause of a torn/ghosted frame
+    // that was showing up reliably during the boot sequence. The label/
+    // style changes above already invalidate their own region via LVGL's
+    // normal object API, so the port task's timer (max 500ms sleep) picks
+    // them up and flushes them on its own — imperceptibly fast, and with
+    // rendering staying single-task-owned as LVGL's threading model expects.
 }

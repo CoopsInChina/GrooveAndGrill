@@ -44,6 +44,32 @@ CONFIG_LWIP_MAX_SOCKETS=14
 CONFIG_ESP32S3_DATA_CACHE_64KB=y
 CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
 
+# RGB panel + PSRAM framebuffer: self-heal a DMA/timing-generator drift.
+# Any flash write (e.g. esp_ota_mark_app_valid_cancel_rollback() in main.c,
+# called right after the first screen navigate — or any later NVS commit)
+# disables the flash cache on both cores for its duration, which can stall
+# the RGB LCD driver's PSRAM-framebuffer-to-bounce-buffer refill ISR
+# mid-scan. Without this, the panel doesn't resync on its own afterwards —
+# it keeps clocking out a torn/shifted frame indefinitely (this is what was
+# hitting us at boot, right as ota_mark_app_valid_cancel_rollback() ran
+# right after the first screen's navigate/fade). This restarts the DMA
+# transfer at the next vsync whenever that happens, so a stall costs at
+# most one bad frame instead of a persistent shift.
+#
+# NOT also enabling CONFIG_LCD_RGB_ISR_IRAM_SAFE (the other half of
+# Espressif's usual pairing for this problem, which keeps the refill ISR
+# itself resident in IRAM so it isn't affected by the cache-disable window
+# in the first place): that requires every callback the ISR calls out to —
+# here, esp_lvgl_port's on_vsync callback, lvgl_port_flush_rgb_vsync_ready_callback
+# in the vendored managed_components/espressif__esp_lvgl_port — to also be
+# IRAM-resident, which it currently isn't. Enabling IRAM_SAFE without also
+# patching that callback risks the ISR jumping into flash-resident code
+# during a cache-disabled window, which is a crash, not a cosmetic glitch —
+# a strictly worse failure mode than what we're fixing. Worth revisiting
+# (with that vendored callback patched to IRAM_ATTR) if RESTART_IN_VSYNC
+# alone doesn't fully resolve it.
+CONFIG_LCD_RGB_RESTART_IN_VSYNC=y
+
 # LVGL colour depth (must match RGB panel bits_per_pixel)
 CONFIG_LV_COLOR_DEPTH_16=y
 
