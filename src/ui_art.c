@@ -15,6 +15,7 @@
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
+#include "esp_attr.h"     // EXT_RAM_BSS_ATTR
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -93,7 +94,11 @@ typedef struct {
     size_t         size;
 } blob_req_t;
 
-static blob_slot_t s_blob_slot[ART_BLOB_SLOTS];
+// EXT_RAM_BSS_ATTR → PSRAM to free internal DRAM for task stacks — same
+// pattern already used throughout sonos_controller.c/ota_update.c. Only
+// the slot table (MAX_FAVOURITES entries) is worth moving; the 4-entry
+// request queue below is tiny and stays in fast internal DRAM.
+static EXT_RAM_BSS_ATTR blob_slot_t s_blob_slot[ART_BLOB_SLOTS];
 static blob_req_t  s_blob_queue[ART_BLOB_QUEUE_LEN];
 static int         s_blob_queue_len = 0;    // guarded by s_url_mutex
 

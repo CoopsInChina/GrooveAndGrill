@@ -108,9 +108,16 @@ void app_main(void)
     }
 
     // ── Memory diagnostics (matches SonosESP boot log) ───────────────
+    // Was using raw 0x4/0x200 — MALLOC_CAP_8BIT (any byte-addressable
+    // memory, PSRAM included) and MALLOC_CAP_RETENTION, not actually
+    // MALLOC_CAP_INTERNAL/MALLOC_CAP_SPIRAM — hence "DRAM free" reading a
+    // PSRAM-inflated ~6MB and "PSRAM free" always reading 0. Fixed to the
+    // real capability flags so this is actually trustworthy for diagnosing
+    // internal-DRAM pressure (see e.g. the poll_task/cmd_task DRAM
+    // exhaustion this was supposed to help catch).
     ESP_LOGI(TAG, "=== MEMORY MAP (post-display, pre-WiFi-wait) ===");
-    ESP_LOGI(TAG, "  DRAM free:  %u bytes", (unsigned)heap_caps_get_free_size(0x00000004));
-    ESP_LOGI(TAG, "  PSRAM free: %u bytes", (unsigned)heap_caps_get_free_size(0x00000200));
+    ESP_LOGI(TAG, "  DRAM free:  %u bytes", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    ESP_LOGI(TAG, "  PSRAM free: %u bytes", (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
     // ── Wait for WiFi ─────────────────────────────────────────────────
     if (display_lock(500)) {
