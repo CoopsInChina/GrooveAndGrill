@@ -1,3 +1,4 @@
+#include "app_log.h"
 #include "tca9554.h"
 #include "buzzer.h"
 #include "display.h"
@@ -68,6 +69,10 @@ static void autodim_timer_cb(TimerHandle_t t)
 
 void app_main(void)
 {
+    // As early as possible, so a WARN/ERROR from anything below this line
+    // is captured to the flash fault log — see src/app_log.c.
+    app_log_init();
+
     // NVS — required by wifi_manager, globals, and settings persistence
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
