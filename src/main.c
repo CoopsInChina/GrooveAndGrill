@@ -28,6 +28,21 @@
 
 static const char *TAG = "main";
 
+// ---- Boot-tear workaround --------------------------------------------
+// A torn/ghosted frame reliably appears during the boot screen's Sonos/API
+// discovery sequence on real hardware — see GitHub issue #2 for the full
+// investigation (BLE timing, RESTART_IN_VSYNC, an lv_refr_now() cross-task
+// hazard, and ui_art_init()'s eager PSRAM allocation were all ruled out or
+// fixed independently, none of it eliminated the tear). Confirmed by
+// experiment: spacing this specific block out in time makes the tear
+// disappear; moving it elsewhere without spacing does not. Root cause is
+// still unknown (likely PSRAM-bus contention between a synchronous network
+// call and the RGB panel's PSRAM-resident flush, but not proven). This is
+// a deliberate, temporary crutch — not a real fix — parked here so `dev`
+// ships without the visible defect while the actual cause gets more time.
+// Remove once issue #2 is resolved.
+#define BOOT_TEAR_WORKAROUND_DELAY() vTaskDelay(pdMS_TO_TICKS(500))
+
 // ---- Autodim timer (fires every 3s, same cadence as SonosESP) ------
 
 static void ntp_sync_cb(struct timeval *tv)
@@ -74,25 +89,6 @@ void app_main(void)
     ESP_ERROR_CHECK(tca9554_init());
     buzzer_init();   // onboard buzzer via the expander (pin 8) — needs I2C up
 
-    // ── BLE — before display_init() ──────────────────────────────────
-    // esp_bt_controller_init/enable (run inside bbq_ble_init()/ble_probe_init()
-    // via nimble_port_init()) was landing at the same wall-clock moment the
-    // display's first real screen was being vsync-swap-flushed, causing a
-    // visible torn/ghosted frame at boot. There's nothing for it to race
-    // against if the display doesn't exist yet, so BLE now starts here.
-    // Also needs a large contiguous block of internal DRAM at init — doing
-    // this before display/WiFi-wait/Sonos/web-server have allocated
-    // anything gives it the best possible shot at that (this same DRAM-
-    // contiguity concern used to motivate running BLE right before the
-    // other background tasks, much later; this is strictly earlier).
-    // bbq_controller_init() loads the persisted source mode (box vs. direct
-    // probe) from NVS, which bbq_source_get() below depends on.
-    bbq_controller_init();
-    if (bbq_source_get() == BBQ_SRC_PROBE)
-        ble_probe_init();   // GATT central to one wireless probe
-    else
-        bbq_ble_init();     // passive observer of the BBQ Box gateway
-
     // Display + LVGL task — runs while WiFi connects in background
     ESP_ERROR_CHECK(display_init());
     display_set_backlight(true);
@@ -134,18 +130,22 @@ void app_main(void)
         display_unlock();
     }
     ESP_LOGI(TAG, "WiFi: %s", wifi_ok ? wifi_manager_ssid() : "not connected");
+    BOOT_TEAR_WORKAROUND_DELAY();
 
     // ── Sonos discovery ───────────────────────────────────────────────
     if (display_lock(500)) {
         ui_boot_set_status("Sonos: Searching...", 60);
         display_unlock();
     }
+    BOOT_TEAR_WORKAROUND_DELAY();
 
     sonos_controller_init();
+    bbq_controller_init();
     bool sonos_ok = false;
     if (wifi_ok) {
         sonos_ok = sonos_controller_discover(SONOS_DISCOVERY_TIMEOUT_MS);
     }
+    BOOT_TEAR_WORKAROUND_DELAY();
 
     if (display_lock(500)) {
         char msg[64];
@@ -158,6 +158,7 @@ void app_main(void)
         display_unlock();
     }
     ESP_LOGI(TAG, "Sonos: %s", sonos_ok ? sonos_active_speaker_name() : "not found");
+    BOOT_TEAR_WORKAROUND_DELAY();
 
     // ── node-sonos-http-api discovery ────────────────────────────────
     // Checks NVS cache; if unreachable starts background /24 subnet scan.
@@ -165,17 +166,20 @@ void app_main(void)
         ui_boot_set_status("API: Checking...", 88);
         display_unlock();
     }
+    BOOT_TEAR_WORKAROUND_DELAY();
 
     bool api_ok = false;
     if (wifi_ok) {
         api_ok = sonos_api_server_init(wifi_manager_ip());
     }
+    BOOT_TEAR_WORKAROUND_DELAY();
 
     // ── Setup web server (port 80) ────────────────────────────────────
     bool srv_ok = false;
     if (wifi_ok) {
         srv_ok = web_server_start();
     }
+    BOOT_TEAR_WORKAROUND_DELAY();
 
     if (display_lock(300)) {
         const char *status = api_ok ? "API: Found" : "API: Scanning...";
@@ -209,7 +213,18 @@ void app_main(void)
     }
 
     // ── Background tasks ──────────────────────────────────────────────
-    // BLE was already started earlier, before display_init() — see there.
+    // BLE first: the controller needs a large contiguous block of internal
+    // DRAM at init. Spawning the Sonos/art/weather tasks beforehand fragments
+    // DRAM enough that esp_bt_controller_init() fails with "Malloc failed".
+    // WiFi is already up, so coexistence is handled from here on.
+    // One NimBLE stack, chosen by the saved source mode: observe the BBQ Box,
+    // or connect directly to a single wireless probe. Switching modes reboots
+    // (see bbq_source_set), so this runs once per boot.
+    if (bbq_source_get() == BBQ_SRC_PROBE)
+        ble_probe_init();   // GATT central to one wireless probe
+    else
+        bbq_ble_init();     // passive observer of the BBQ Box gateway
+
     ui_art_init();
     weather_init();
     sonos_controller_start_polling();

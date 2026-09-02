@@ -375,6 +375,31 @@ static size_t download_url(const char *url, uint8_t *buf, size_t buf_sz)
     return ctx.total;
 }
 
+// Lazily allocates + zeroes s_disp_buf/s_work_buf/s_blob_buf (and re-seeds
+// the descriptors that point at them) on the first real request, instead of
+// synchronously inside ui_art_init() at boot — see that function's comment.
+// Idempotent; safe to call at the top of every loop iteration.
+static void ensure_art_bufs_allocated(void)
+{
+    if (s_disp_buf) return;
+
+    s_disp_buf = (uint16_t *)heap_caps_calloc(ART_PIXEL_BUF_BYTES, 1,
+                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_work_buf = (uint16_t *)heap_caps_calloc(ART_PIXEL_BUF_BYTES, 1,
+                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_blob_buf = (uint16_t *)heap_caps_calloc(ART_PIXEL_BUF_BYTES, 1,
+                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_disp_buf || !s_work_buf || !s_blob_buf) {
+        ESP_LOGE(TAG, "art buf alloc failed");
+        return;
+    }
+
+    s_art_dsc.data      = (const uint8_t *)s_disp_buf;
+    s_blob_art_dsc.data = (const uint8_t *)s_blob_buf;
+    ESP_LOGI(TAG, "art bufs allocated  disp=%p work=%p blob=%p",
+             (void*)s_disp_buf, (void*)s_work_buf, (void*)s_blob_buf);
+}
+
 // ── Background art task ───────────────────────────────────────────────────────
 static void art_task(void *arg)
 {
@@ -422,6 +447,9 @@ static void art_task(void *arg)
         xSemaphoreGive(s_url_mutex);
 
         if (!has_work) { vTaskDelay(pdMS_TO_TICKS(300)); continue; }
+
+        ensure_art_bufs_allocated();
+        if (!s_disp_buf) { vTaskDelay(pdMS_TO_TICKS(300)); continue; }   // alloc failed — retry later
 
         // ── Determine source: blob (no download) or URL ───────────────────────
         const uint8_t *src_data;
@@ -541,17 +569,20 @@ void ui_art_init(void)
 {
     s_url_mutex = xSemaphoreCreateMutex();
 
-    // Allocate double-buffers in PSRAM
-    s_disp_buf = (uint16_t *)heap_caps_calloc(ART_PIXEL_BUF_BYTES, 1,
-                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    s_work_buf = (uint16_t *)heap_caps_calloc(ART_PIXEL_BUF_BYTES, 1,
-                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    s_blob_buf = (uint16_t *)heap_caps_calloc(ART_PIXEL_BUF_BYTES, 1,
-                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_disp_buf || !s_work_buf || !s_blob_buf)
-        ESP_LOGE(TAG, "art buf alloc failed");
-
-    // Seed URL descriptor — data pointer filled in on first ui_art_update()
+    // s_disp_buf/s_work_buf/s_blob_buf (3 x ART_PIXEL_BUF_BYTES, ~527KB
+    // total) are now allocated lazily, on the first real request inside
+    // art_task — see ensure_art_bufs_allocated(). They used to be zeroed
+    // synchronously right here, which landed squarely in the boot
+    // sequence's most timing-sensitive window (right after BLE init,
+    // shortly after the first screen's fade) and was a strong contributor
+    // to a torn/ghosted boot-time frame: spacing every boot step 1s apart
+    // made the corruption disappear, and this was ~527KB of PSRAM writes
+    // competing with the RGB panel's own PSRAM framebuffer reads for bus
+    // bandwidth at exactly the wrong moment. Deferring costs nothing —
+    // ui_art_update()/ui_art_update_blob() only ever call lv_img_set_src()
+    // once s_new_art/s_new_blob_art go true, which can't happen before
+    // art_task has actually allocated and decoded real content, so a
+    // momentarily-NULL s_art_dsc.data/s_blob_art_dsc.data here is safe.
     memset(&s_art_dsc, 0, sizeof(s_art_dsc));
     s_art_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
     s_art_dsc.header.w  = ART_SIZE;
@@ -569,8 +600,7 @@ void ui_art_init(void)
 
     // Pin art task to core 1 (LVGL runs on core 0) to avoid blocking the UI.
     xTaskCreatePinnedToCore(art_task, "ui_art", ART_TASK_STACK, NULL, 2, NULL, 1);
-    ESP_LOGI(TAG, "init OK  disp=%p work=%p blob=%p",
-             (void*)s_disp_buf, (void*)s_work_buf, (void*)s_blob_buf);
+    ESP_LOGI(TAG, "init OK (buffers allocated lazily on first request)");
 }
 
 void ui_art_request(const char *raw_url)
