@@ -5,6 +5,7 @@
 #include "bbq_controller.h"
 #include "meat_temps.h"
 #include "app_log.h"
+#include "esp_attr.h"     // EXT_RAM_BSS_ATTR
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -867,9 +868,16 @@ static const char *bbq_tab_content(void)
 
 #define FAULTLOG_MAX_ROWS 200
 
+// EXT_RAM_BSS_ATTR → PSRAM. This is ~24KB (200 * sizeof(app_log_fault_record_t))
+// — as a plain `static` it was sitting permanently in internal DRAM for the
+// whole life of the app regardless of whether this page is ever requested,
+// on a chip where that budget is already razor-thin (WiFi + BLE + LVGL's
+// pool leave headroom in the tens of KB). This one array accounted for the
+// entire "Sonos poll_task/cmd_task fail to allocate stacks" regression.
+static EXT_RAM_BSS_ATTR app_log_fault_record_t rows[FAULTLOG_MAX_ROWS];
+
 static esp_err_t faultlog_get_handler(httpd_req_t *req)
 {
-    static app_log_fault_record_t rows[FAULTLOG_MAX_ROWS];
     int n = app_log_read_faults(rows, FAULTLOG_MAX_ROWS);
 
     httpd_resp_set_type(req, "text/html; charset=utf-8");
