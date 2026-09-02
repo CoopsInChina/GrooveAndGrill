@@ -8,7 +8,7 @@
 #include "esp_netif.h"
 #include "esp_mac.h"
 #include "esp_event.h"
-#include "esp_log.h"
+#include "app_log.h"
 #include "esp_http_server.h"
 #include "esp_sntp.h"
 #include "nvs_flash.h"
@@ -43,11 +43,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         s_connected = false;
         memset(s_ip, 0, sizeof(s_ip));
         xEventGroupSetBits(s_wifi_events, WIFI_FAIL_BIT);
-        ESP_LOGW(TAG, "STA disconnected");
+        LOGW(TAG, "STA disconnected");
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *ev = (ip_event_got_ip_t *)data;
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&ev->ip_info.ip));
-        ESP_LOGI(TAG, "Got IP: %s", s_ip);
+        LOGI(TAG, "Got IP: %s", s_ip);
         s_connected = true;
         xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
     } else if (base == IP_EVENT && id == IP_EVENT_AP_STAIPASSIGNED) {
@@ -56,7 +56,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         // the DHCP server actually hands out a lease — its absence pins the
         // failure to the DHCP exchange itself rather than something after.
         ip_event_ap_staipassigned_t *ev = (ip_event_ap_staipassigned_t *)data;
-        ESP_LOGI(TAG, "AP: leased " IPSTR " to " MACSTR, IP2STR(&ev->ip),
+        LOGI(TAG, "AP: leased " IPSTR " to " MACSTR, IP2STR(&ev->ip),
                  MAC2STR(ev->mac));
     }
 }
@@ -109,7 +109,7 @@ bool wifi_manager_begin_connect(void)
 {
     char ssid[64] = {0}, pass[64] = {0};
     if (!load_credentials(ssid, sizeof(ssid), pass, sizeof(pass))) {
-        ESP_LOGW(TAG, "No saved credentials");
+        LOGW(TAG, "No saved credentials");
         return false;
     }
 
@@ -120,7 +120,7 @@ bool wifi_manager_begin_connect(void)
     xEventGroupClearBits(s_wifi_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wcfg));
     ESP_ERROR_CHECK(esp_wifi_connect());
-    ESP_LOGI(TAG, "Connecting to '%s' (background)...", ssid);
+    LOGI(TAG, "Connecting to '%s' (background)...", ssid);
     return true;
 }
 
@@ -132,7 +132,7 @@ bool wifi_manager_wait_connect(uint32_t timeout_ms)
 
     for (int retry = 0; retry < WIFI_CONNECT_RETRIES; retry++) {
         if (retry > 0) {
-            ESP_LOGI(TAG, "Retry %d/%d for '%s'", retry, WIFI_CONNECT_RETRIES - 1, ssid);
+            LOGW(TAG, "Retry %d/%d for '%s'", retry, WIFI_CONNECT_RETRIES - 1, ssid);
             esp_wifi_disconnect();
             vTaskDelay(pdMS_TO_TICKS(500));
 
@@ -151,14 +151,14 @@ bool wifi_manager_wait_connect(uint32_t timeout_ms)
 
         if (bits & WIFI_CONNECTED_BIT) {
             strncpy(s_ssid, ssid, sizeof(s_ssid) - 1);
-            ESP_LOGI(TAG, "Connected! IP: %s", s_ip);
+            LOGI(TAG, "Connected! IP: %s", s_ip);
             wifi_manager_start_ntp();
             return true;
         }
-        ESP_LOGW(TAG, "Attempt %d failed", retry + 1);
+        LOGW(TAG, "Attempt %d failed", retry + 1);
     }
 
-    ESP_LOGE(TAG, "Could not connect to '%s' after %d attempts", ssid, WIFI_CONNECT_RETRIES);
+    LOGE(TAG, "Could not connect to '%s' after %d attempts", ssid, WIFI_CONNECT_RETRIES);
     return false;
 }
 
@@ -179,7 +179,7 @@ void wifi_manager_start_ntp(void)
     esp_sntp_setservername(2, "cn.pool.ntp.org");
     esp_sntp_init();
     g_ntp_synced = false;
-    ESP_LOGI(TAG, "NTP sync started");
+    LOGI(TAG, "NTP sync started");
 }
 
 // ---- Background monitor task -----------------------------------------
@@ -190,7 +190,7 @@ static void monitor_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(10000));
 
         if (!s_connected && !s_ap_active) {
-            ESP_LOGI(TAG, "Monitor: reconnecting...");
+            LOGW(TAG, "Monitor: reconnecting...");
             xEventGroupClearBits(s_wifi_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
             esp_wifi_connect();
             EventBits_t bits = xEventGroupWaitBits(s_wifi_events,
@@ -209,7 +209,7 @@ static void monitor_task(void *arg)
             time(&now);
             if (now > 1700000000) {  // sanity: after Nov 2023
                 g_ntp_synced = true;
-                ESP_LOGI(TAG, "NTP synced");
+                LOGI(TAG, "NTP synced");
             }
         }
     }
@@ -337,7 +337,7 @@ static esp_err_t portal_scan_handler(httpd_req_t *req)
         // Seen empty results with no visible cause — this pins it down:
         // esp_wifi_scan_start can fail outright in concurrent AP+STA mode
         // (e.g. ESP_ERR_WIFI_STATE) and the old code silently ignored it.
-        ESP_LOGE(TAG, "scan: esp_wifi_scan_start failed: %s", esp_err_to_name(scan_err));
+        LOGE(TAG, "scan: esp_wifi_scan_start failed: %s", esp_err_to_name(scan_err));
     }
 
     uint16_t count = 0;
@@ -560,7 +560,7 @@ void wifi_manager_start_setup_ap(void)
     xTaskCreate(dns_server_task, "dns_srv", 3072, NULL, 5, &s_dns_task);
 
     s_ap_active = true;
-    ESP_LOGI(TAG, "Setup AP active — SSID: %s  http://%s", WIFI_AP_SSID, WIFI_AP_IP);
+    LOGI(TAG, "Setup AP active — SSID: %s  http://%s", WIFI_AP_SSID, WIFI_AP_IP);
 }
 
 void wifi_manager_stop_setup_ap(void)
@@ -578,7 +578,7 @@ void wifi_manager_stop_setup_ap(void)
     esp_wifi_set_mode(WIFI_MODE_STA);
     bbq_radio_pause(false);
     web_server_start();
-    ESP_LOGI(TAG, "Setup AP stopped");
+    LOGI(TAG, "Setup AP stopped");
 }
 
 // ---- Accessors -------------------------------------------------------
@@ -596,6 +596,6 @@ void wifi_manager_save_credentials(const char *ssid, const char *pass)
         nvs_set_str(nvs, NVS_KEY_WIFI_PASS, pass);
         nvs_commit(nvs);
         nvs_close(nvs);
-        ESP_LOGI(TAG, "Saved credentials for '%s'", ssid);
+        LOGI(TAG, "Saved credentials for '%s'", ssid);
     }
 }

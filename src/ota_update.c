@@ -7,7 +7,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_ota_ops.h"
 #include "esp_attr.h"
-#include "esp_log.h"
+#include "app_log.h"
 #include "esp_timer.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
@@ -119,7 +119,7 @@ static int fetch_url(const char *url, char *buf, int max_len, int timeout_ms)
     int status = esp_http_client_get_status_code(c);
     esp_http_client_cleanup(c);
     if (err != ESP_OK || status != 200) {
-        ESP_LOGW(TAG, "check fetch err=%d status=%d", err, status);
+        LOGW(TAG, "check fetch err=%d status=%d", err, status);
         return -1;
     }
     return status;
@@ -169,7 +169,7 @@ static void check_task(void *arg)
                                                                  : OTA_UPDATE_AVAILABLE;
     cJSON_Delete(root);
     set_status(&s);
-    ESP_LOGI(TAG, "check: running=%s latest=%s", FIRMWARE_VERSION, s.latest_version);
+    LOGI(TAG, "check: running=%s latest=%s", FIRMWARE_VERSION, s.latest_version);
     vTaskDelete(NULL);
 }
 
@@ -182,7 +182,7 @@ void ota_check_async(void)
         ota_status_t s = { .state = OTA_CHECK_FAILED };
         snprintf(s.error, sizeof(s.error), "Out of memory — try again");
         set_status(&s);
-        ESP_LOGE(TAG, "xTaskCreateStatic(check) failed");
+        LOGE(TAG, "xTaskCreateStatic(check) failed");
     }
 }
 
@@ -271,10 +271,10 @@ static void update_task(void *arg)
             esp_http_client_fetch_headers(client);
             status = esp_http_client_get_status_code(client);
             if (status == 200 || status == 206) break;
-            ESP_LOGW(TAG, "unexpected HTTP status %d", status);
+            LOGW(TAG, "unexpected HTTP status %d", status);
             err = ESP_FAIL;
         }
-        ESP_LOGW(TAG, "connect attempt %d/%d failed: %s",
+        LOGW(TAG, "connect attempt %d/%d failed: %s",
                  attempt, OTA_BEGIN_RETRIES, esp_err_to_name(err));
         esp_http_client_cleanup(client);
         client = NULL;
@@ -295,7 +295,7 @@ static void update_task(void *arg)
     // sending the whole file from byte 0 again. Restart clean rather than
     // risk corrupting the partition by writing over our partial progress.
     if (s_ota_written > 0 && status == 200) {
-        ESP_LOGW(TAG, "server ignored Range — restarting from scratch");
+        LOGW(TAG, "server ignored Range — restarting from scratch");
         esp_ota_abort(s_ota_handle);
         esp_ota_begin(s_ota_partition, OTA_SIZE_UNKNOWN, &s_ota_handle);
         s_ota_written = 0;
@@ -328,13 +328,13 @@ static void update_task(void *arg)
             last_bytes = s_ota_written;
             last_progress_ms = now;
         } else if (now - last_progress_ms >= OTA_STALL_TIMEOUT_MS) {
-            ESP_LOGW(TAG, "update: stalled at %d bytes, giving up", s_ota_written);
+            LOGE(TAG, "update: stalled at %d bytes, giving up", s_ota_written);
             stalled = true;
             break;
         }
         if (now - last_log_ms >= OTA_LOG_INTERVAL_MS) {
             last_log_ms = now;
-            ESP_LOGI(TAG, "update: %d / %d bytes", s.bytes_read, s.image_size);
+            LOGI(TAG, "update: %d / %d bytes", s.bytes_read, s.image_size);
         }
     }
     esp_http_client_cleanup(client);
@@ -373,7 +373,7 @@ static void update_task(void *arg)
     // countdown screen — we don't esp_restart() here ourselves.
     s.state = OTA_DONE_OK;
     set_status(&s);
-    ESP_LOGI(TAG, "update: wrote %d bytes, ready to reboot", s.bytes_read);
+    LOGI(TAG, "update: wrote %d bytes, ready to reboot", s.bytes_read);
     vTaskDelete(NULL);
 }
 
@@ -386,7 +386,7 @@ void ota_start_async(void)
         ota_status_t s = { .state = OTA_DONE_FAIL };
         snprintf(s.error, sizeof(s.error), "Out of memory — try again");
         set_status(&s);
-        ESP_LOGE(TAG, "xTaskCreate(update) failed");
+        LOGE(TAG, "xTaskCreate(update) failed");
     }
 }
 
@@ -398,6 +398,6 @@ void ota_mark_app_valid(void)
     if (esp_ota_get_state_partition(running, &state) == ESP_OK &&
         state == ESP_OTA_IMG_PENDING_VERIFY) {
         esp_ota_mark_app_valid_cancel_rollback();
-        ESP_LOGI(TAG, "image marked valid, rollback cancelled");
+        LOGI(TAG, "image marked valid, rollback cancelled");
     }
 }

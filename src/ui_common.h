@@ -45,6 +45,11 @@ typedef enum {
 // Navigate to a screen (must hold display lock)
 void ui_navigate_to(screen_id_t id);
 
+// Same, but with an explicit lv_scr_load_anim_t instead of the default
+// fade — used for the Sonos-main <-> Favourites swipe pair so that
+// transition matches the horizontal drag feel of the favourites carousel.
+void ui_navigate_to_anim(screen_id_t id, lv_scr_load_anim_t anim);
+
 // Invalidate a screen so it is recreated next visit
 void ui_screen_invalidate(screen_id_t id);
 

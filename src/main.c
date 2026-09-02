@@ -1,3 +1,4 @@
+#include "app_log.h"
 #include "tca9554.h"
 #include "buzzer.h"
 #include "display.h"
@@ -13,11 +14,11 @@
 #include "ui_common.h"
 #include "ui_boot.h"
 #include "ui_art.h"
+#include "ui_favourites.h"
 #include "web_server.h"
 #include "app_config.h"
 
 #include "nvs_flash.h"
-#include "esp_log.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
 #include "esp_sntp.h"
@@ -49,7 +50,7 @@ static void ntp_sync_cb(struct timeval *tv)
 {
     (void)tv;
     g_ntp_synced = true;
-    ESP_LOGI(TAG, "NTP synced");
+    LOGI(TAG, "NTP synced");
 }
 
 static void autodim_timer_cb(TimerHandle_t t)
@@ -68,6 +69,10 @@ static void autodim_timer_cb(TimerHandle_t t)
 
 void app_main(void)
 {
+    // As early as possible, so a WARN/ERROR from anything below this line
+    // is captured to the flash fault log — see src/app_log.c.
+    app_log_init();
+
     // NVS — required by wifi_manager, globals, and settings persistence
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -102,9 +107,16 @@ void app_main(void)
     }
 
     // ── Memory diagnostics (matches SonosESP boot log) ───────────────
-    ESP_LOGI(TAG, "=== MEMORY MAP (post-display, pre-WiFi-wait) ===");
-    ESP_LOGI(TAG, "  DRAM free:  %u bytes", (unsigned)heap_caps_get_free_size(0x00000004));
-    ESP_LOGI(TAG, "  PSRAM free: %u bytes", (unsigned)heap_caps_get_free_size(0x00000200));
+    // Was using raw 0x4/0x200 — MALLOC_CAP_8BIT (any byte-addressable
+    // memory, PSRAM included) and MALLOC_CAP_RETENTION, not actually
+    // MALLOC_CAP_INTERNAL/MALLOC_CAP_SPIRAM — hence "DRAM free" reading a
+    // PSRAM-inflated ~6MB and "PSRAM free" always reading 0. Fixed to the
+    // real capability flags so this is actually trustworthy for diagnosing
+    // internal-DRAM pressure (see e.g. the poll_task/cmd_task DRAM
+    // exhaustion this was supposed to help catch).
+    LOGI(TAG, "=== MEMORY MAP (post-display, pre-WiFi-wait) ===");
+    LOGI(TAG, "  DRAM free:  %u bytes", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    LOGI(TAG, "  PSRAM free: %u bytes", (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
     // ── Wait for WiFi ─────────────────────────────────────────────────
     if (display_lock(500)) {
@@ -129,7 +141,7 @@ void app_main(void)
         ui_boot_set_icon(BOOT_ICON_WIFI, wifi_ok ? BOOT_STATE_OK : BOOT_STATE_FAIL);
         display_unlock();
     }
-    ESP_LOGI(TAG, "WiFi: %s", wifi_ok ? wifi_manager_ssid() : "not connected");
+    LOGI(TAG, "WiFi: %s", wifi_ok ? wifi_manager_ssid() : "not connected");
     BOOT_TEAR_WORKAROUND_DELAY();
 
     // ── Sonos discovery ───────────────────────────────────────────────
@@ -157,7 +169,7 @@ void app_main(void)
         ui_boot_set_icon(BOOT_ICON_SONOS, sonos_ok ? BOOT_STATE_OK : BOOT_STATE_FAIL);
         display_unlock();
     }
-    ESP_LOGI(TAG, "Sonos: %s", sonos_ok ? sonos_active_speaker_name() : "not found");
+    LOGI(TAG, "Sonos: %s", sonos_ok ? sonos_active_speaker_name() : "not found");
     BOOT_TEAR_WORKAROUND_DELAY();
 
     // ── node-sonos-http-api discovery ────────────────────────────────
@@ -187,8 +199,8 @@ void app_main(void)
         ui_boot_set_icon(BOOT_ICON_SERVER, srv_ok ? BOOT_STATE_OK : BOOT_STATE_FAIL);
         display_unlock();
     }
-    ESP_LOGI(TAG, "API server: %s", api_ok ? g_api_server : "scanning in background");
-    ESP_LOGI(TAG, "Setup server: %s", srv_ok ? "running" : "failed");
+    LOGI(TAG, "API server: %s", api_ok ? g_api_server : "scanning in background");
+    LOGI(TAG, "Setup server: %s", srv_ok ? "running" : "failed");
 
     // Hold boot screen so user can read the status dots
     vTaskDelay(pdMS_TO_TICKS(2000));
@@ -226,6 +238,14 @@ void app_main(void)
         bbq_ble_init();     // passive observer of the BBQ Box gateway
 
     ui_art_init();
+    // Favourites are already loaded by now (sonos_controller_init() above
+    // reads them from SPIFFS/NVS synchronously) — kick off decoding all of
+    // their art in the background now, rather than waiting for the user
+    // to actually open Favourites, so it's typically already sitting
+    // ready the first time they do. Cheap: favourites are relatively
+    // static, and each one's decode slot is permanent (see ui_art.h) —
+    // this never repeats the work.
+    ui_favourites_prefetch_all();
     weather_init();
     sonos_controller_start_polling();
     wifi_manager_start_monitor();
@@ -235,6 +255,6 @@ void app_main(void)
                                                pdTRUE, NULL, autodim_timer_cb);
     if (autodim_timer) xTimerStart(autodim_timer, 0);
 
-    ESP_LOGI(TAG, "Groove & Grill v%s running — heap: %lu free",
+    LOGI(TAG, "Groove & Grill v%s running — heap: %lu free",
              FIRMWARE_VERSION, (unsigned long)esp_get_free_heap_size());
 }

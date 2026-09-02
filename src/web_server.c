@@ -4,11 +4,12 @@
 #include "bbq_ble.h"
 #include "bbq_controller.h"
 #include "meat_temps.h"
+#include "app_log.h"
+#include "esp_attr.h"     // EXT_RAM_BSS_ATTR
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "esp_system.h"
-#include "esp_log.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -261,7 +262,8 @@ static const char HTML_HEAD[] =
     "</style></head><body>";
 
 static const char HTML_TAIL[] =
-    "<p class='footer'>Groove &amp; Grill &mdash; setup</p></body></html>";
+    "<p class='footer'>Groove &amp; Grill &mdash; setup &middot; "
+    "<a href='/faultlog' style='color:#555'>fault log</a></p></body></html>";
 
 static const char *bbq_tab_content(void);   // defined below, used by setup_get_handler
 
@@ -485,7 +487,7 @@ static esp_err_t play_post_handler(httpd_req_t *req)
     if (p) idx = atoi(p + 4);
     if (idx >= 0 && idx < sonos_favourites_count()) {
         sonos_play_favourite((uint8_t)idx);
-        ESP_LOGI(TAG, "Web play: %d (%s)", idx, sonos_favourite_name(idx));
+        LOGI(TAG, "Web play: %d (%s)", idx, sonos_favourite_name(idx));
     }
     httpd_resp_set_status(req, "303 See Other");
     httpd_resp_set_hdr(req, "Location", "/setup");
@@ -527,9 +529,9 @@ static esp_err_t add_structured_handler(httpd_req_t *req)
         build_cmd_from_structured(source, type, id, cmd, sizeof(cmd), name, sizeof(name))) {
         ok = sonos_add_device_favourite(name, cmd);
         if (ok) new_idx = sonos_device_fav_count() - 1;
-        ESP_LOGI(TAG, "Add structured '%s' → %s: %s (idx=%d)", name, cmd, ok ? "ok" : "full", new_idx);
+        LOGI(TAG, "Add structured '%s' → %s: %s (idx=%d)", name, cmd, ok ? "ok" : "full", new_idx);
     } else {
-        ESP_LOGW(TAG, "add_structured: bad fields src=%s typ=%s id=%s", source, type, id);
+        LOGW(TAG, "add_structured: bad fields src=%s typ=%s id=%s", source, type, id);
     }
     char resp[48];
     snprintf(resp, sizeof(resp), "{\"ok\":%s,\"idx\":%d}", ok ? "true" : "false", new_idx);
@@ -557,9 +559,9 @@ static esp_err_t add_by_url_handler(httpd_req_t *req)
     if (url[0] && build_cmd_from_url(url, cmd, sizeof(cmd), name, sizeof(name))) {
         ok = sonos_add_device_favourite(name, cmd);
         if (ok) new_idx = sonos_device_fav_count() - 1;
-        ESP_LOGI(TAG, "Add URL '%s' → %s: %s (idx=%d)", name, cmd, ok ? "ok" : "full", new_idx);
+        LOGI(TAG, "Add URL '%s' → %s: %s (idx=%d)", name, cmd, ok ? "ok" : "full", new_idx);
     } else {
-        ESP_LOGW(TAG, "add_by_url: unrecognised URL: %.80s", url);
+        LOGW(TAG, "add_by_url: unrecognised URL: %.80s", url);
     }
     char resp[48];
     snprintf(resp, sizeof(resp), "{\"ok\":%s,\"idx\":%d}", ok ? "true" : "false", new_idx);
@@ -580,7 +582,7 @@ static esp_err_t del_custom_handler(httpd_req_t *req)
     if (p) idx = atoi(p + 4);
     if (idx >= 0) {
         bool ok = sonos_remove_device_favourite(idx);
-        ESP_LOGI(TAG, "Del custom[%d]: %s", idx, ok ? "ok" : "bad index");
+        LOGI(TAG, "Del custom[%d]: %s", idx, ok ? "ok" : "bad index");
     }
     httpd_resp_set_status(req, "303 See Other");
     httpd_resp_set_hdr(req, "Location", "/setup");
@@ -625,7 +627,7 @@ static esp_err_t upload_art_handler(httpd_req_t *req)
 
     bool ok = sonos_set_device_fav_art(idx, buf, (size_t)received);
     heap_caps_free(buf);
-    ESP_LOGI(TAG, "upload_art idx=%d size=%d ok=%d", idx, received, ok);
+    LOGI(TAG, "upload_art idx=%d size=%d ok=%d", idx, received, ok);
 
     char resp[32];
     snprintf(resp, sizeof(resp), "{\"ok\":%s}", ok ? "true" : "false");
@@ -720,7 +722,7 @@ static esp_err_t bbq_assign_handler(httpd_req_t *req)
 
     bbq_sensor_assign((sensor_src_t)src, (uint8_t)hw, (uint8_t)grill,
                       (sensor_role_t)role, (meat_kind_t)kind, target);
-    ESP_LOGI(TAG, "assign src=%d hw=%d -> grill=%d role=%d kind=%d target=%d",
+    LOGI(TAG, "assign src=%d hw=%d -> grill=%d role=%d kind=%d target=%d",
              src, hw, grill, role, kind, target);
 
     httpd_resp_set_type(req, "application/json");
@@ -744,7 +746,7 @@ static esp_err_t bbq_source_handler(httpd_req_t *req)
     form_field(body, "mode", v, sizeof(v));
     bbq_source_t mode = (atoi(v) == BBQ_SRC_PROBE) ? BBQ_SRC_PROBE : BBQ_SRC_BOX;
     bbq_source_set(mode);
-    ESP_LOGI(TAG, "web: BBQ source -> %d, rebooting", (int)mode);
+    LOGI(TAG, "web: BBQ source -> %d, rebooting", (int)mode);
 
     httpd_resp_set_type(req, "application/json");
     esp_err_t r = httpd_resp_sendstr(req, "{\"ok\":true}");   // flush before restarting
@@ -857,6 +859,88 @@ static const char *bbq_tab_content(void)
     return CONTENT;
 }
 
+// ---- GET /faultlog — WARN/ERROR history, survives reboot/power loss ----
+// Standalone page (own inline styles) rather than a tab in HTML_HEAD/
+// setup_get_handler — this is a diagnostic tool, not part of the normal
+// setup flow. Server-rendered, no JS/JSON round trip needed for something
+// this small (fault volume is low by design — see app_log.c).
+
+#define FAULTLOG_MAX_ROWS 200
+
+// EXT_RAM_BSS_ATTR → PSRAM. This is ~24KB (200 * sizeof(app_log_fault_record_t))
+// — as a plain `static` it was sitting permanently in internal DRAM for the
+// whole life of the app regardless of whether this page is ever requested,
+// on a chip where that budget is already razor-thin (WiFi + BLE + LVGL's
+// pool leave headroom in the tens of KB). This one array accounted for the
+// entire "Sonos poll_task/cmd_task fail to allocate stacks" regression.
+static EXT_RAM_BSS_ATTR app_log_fault_record_t rows[FAULTLOG_MAX_ROWS];
+
+static esp_err_t faultlog_get_handler(httpd_req_t *req)
+{
+    int n = app_log_read_faults(rows, FAULTLOG_MAX_ROWS);
+
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_sendstr_chunk(req,
+        "<!DOCTYPE html><html><head>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<meta charset='utf-8'><title>Groove &amp; Grill &mdash; Fault Log</title>"
+        "<style>"
+        "body{font-family:system-ui,sans-serif;background:#111;color:#eee;"
+             "max-width:640px;margin:0 auto;padding:16px 12px}"
+        "h1{color:#1db954;margin:0 0 4px;text-align:center;font-size:1.1rem}"
+        "p.sub{color:#888;text-align:center;margin:0 0 16px;font-size:.8rem}"
+        ".row{background:#1c1c1c;border-radius:8px;padding:10px 12px;margin:6px 0;"
+             "font-size:.85rem;border-left:3px solid #444}"
+        ".row.warn{border-left-color:#e8b422}"
+        ".row.error{border-left-color:#ff5555}"
+        ".row .hdr{display:flex;justify-content:space-between;color:#999;"
+                  "font-size:.72rem;margin-bottom:4px}"
+        ".row .lvl{font-weight:700}"
+        ".row.warn .lvl{color:#e8b422}.row.error .lvl{color:#ff5555}"
+        ".row .msg{color:#eee;word-break:break-word}"
+        ".empty{color:#666;text-align:center;padding:32px 0}"
+        "button{background:#333;color:#e66;border:none;border-radius:6px;"
+               "padding:10px 16px;font-size:.85rem;cursor:pointer;width:100%;margin-top:16px}"
+        "</style></head><body>"
+        "<h1>Fault Log</h1>");
+
+    char sub[64];
+    snprintf(sub, sizeof(sub), "<p class='sub'>%d entr%s (WARN/ERROR only)</p>",
+             n, n == 1 ? "y" : "ies");
+    httpd_resp_sendstr_chunk(req, sub);
+
+    if (n == 0) {
+        httpd_resp_sendstr_chunk(req, "<p class='empty'>No faults recorded.</p>");
+    } else {
+        char row[256];
+        for (int i = n - 1; i >= 0; i--) {   // newest first
+            const app_log_fault_record_t *r = &rows[i];
+            const char *cls = (r->level == APP_LOG_ERROR) ? "error" : "warn";
+            const char *lvl = (r->level == APP_LOG_ERROR) ? "ERROR" : "WARN";
+            snprintf(row, sizeof(row),
+                     "<div class='row %s'><div class='hdr'><span class='lvl'>%s</span>"
+                     "<span>%s &middot; %lu ms</span></div><div class='msg'>%s</div></div>",
+                     cls, lvl, r->tag, (unsigned long)r->timestamp_ms, r->msg);
+            httpd_resp_sendstr_chunk(req, row);
+        }
+    }
+
+    httpd_resp_sendstr_chunk(req,
+        "<form method='POST' action='/faultlog_clear' "
+        "onsubmit=\"return confirm('Clear the fault log?');\">"
+        "<button type='submit'>Clear log</button></form>"
+        "</body></html>");
+    return httpd_resp_sendstr_chunk(req, NULL);
+}
+
+static esp_err_t faultlog_clear_handler(httpd_req_t *req)
+{
+    app_log_clear_faults();
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "/faultlog");
+    return httpd_resp_send(req, NULL, 0);
+}
+
 // ---- Public API -----------------------------------------------------
 
 bool web_server_start(void)
@@ -865,11 +949,11 @@ bool web_server_start(void)
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port       = 80;
-    cfg.max_uri_handlers  = 12;
+    cfg.max_uri_handlers  = 14;
     cfg.recv_wait_timeout = 30;   // seconds — needed for 25KB art upload
 
     if (httpd_start(&s_server, &cfg) != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start HTTP server");
+        LOGE(TAG, "Failed to start HTTP server");
         return false;
     }
 
@@ -885,11 +969,13 @@ bool web_server_start(void)
         { .uri = "/bbq_data",      .method = HTTP_GET,  .handler = bbq_data_handler        },
         { .uri = "/bbq_assign",    .method = HTTP_POST, .handler = bbq_assign_handler      },
         { .uri = "/bbq_source",    .method = HTTP_POST, .handler = bbq_source_handler      },
+        { .uri = "/faultlog",       .method = HTTP_GET,  .handler = faultlog_get_handler   },
+        { .uri = "/faultlog_clear", .method = HTTP_POST, .handler = faultlog_clear_handler },
     };
     for (int i = 0; i < (int)(sizeof(uris) / sizeof(uris[0])); i++)
         httpd_register_uri_handler(s_server, &uris[i]);
 
-    ESP_LOGI(TAG, "Setup server: http://%s/setup", wifi_manager_ip());
+    LOGI(TAG, "Setup server: http://%s/setup", wifi_manager_ip());
     return true;
 }
 

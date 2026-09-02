@@ -2,7 +2,7 @@
 #include "board_config.h"
 
 #include "driver/i2c.h"
-#include "esp_log.h"
+#include "app_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -50,7 +50,7 @@ esp_err_t tca9554_init(void)
     ESP_ERROR_CHECK(write_reg(TCA9554_REG_OUTPUT, s_output_shadow));
     ESP_ERROR_CHECK(write_reg(TCA9554_REG_CONFIG, 0x00));  // all outputs
 
-    ESP_LOGI(TAG, "TCA9554PWR ready");
+    LOGI(TAG, "TCA9554PWR ready");
     return ESP_OK;
 }
 

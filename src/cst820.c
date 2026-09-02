@@ -5,7 +5,7 @@
 #include "tca9554.h"
 #include "driver/i2c.h"
 #include "driver/gpio.h"
-#include "esp_log.h"
+#include "app_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
@@ -14,6 +14,7 @@ static const char *TAG = "cst820";
 
 static lv_coord_t s_x = 0, s_y = 0;
 static bool       s_pressed     = false;
+static bool       s_was_valid   = false;   // previous frame's touch-valid state, for press/release edges
 static uint32_t   s_log_counter = 0;
 static int        s_nack_count  = 0;
 
@@ -33,10 +34,13 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
         &reg, 1, buf, sizeof(buf),
         pdMS_TO_TICKS(10));
 
+    // Raw I2C poll bytes — only useful when actively chasing a touch-driver
+    // fault (e.g. the NACK/sleep issue below), so DEBUG-only. Still sampled
+    // (not every poll) so it's readable rather than a solid wall even then.
     s_log_counter++;
     if (s_log_counter % 200 == 1) {
-        ESP_LOGI(TAG, "poll ret=%d buf=[%02x %02x %02x %02x %02x %02x %02x]",
-                 ret, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6]);
+        LOGD(TAG, "poll ret=%d buf=[%02x %02x %02x %02x %02x %02x %02x]",
+             ret, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6]);
     }
 
     if (ret != ESP_OK) {
@@ -47,8 +51,8 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
         // write itself NACKs — harmless). No task/vTaskDelay from this context.
         if (s_nack_count % 100 == 0) {
             esp_err_t wr = cst820_write_reg(0xFE, 0x01);
-            ESP_LOGW(TAG, "CST820 NACK×%d — re-asserted no-sleep: %s",
-                     s_nack_count, wr == ESP_OK ? "OK" : esp_err_to_name(wr));
+            LOGW(TAG, "CST820 NACK x%d — re-asserted no-sleep: %s",
+                 s_nack_count, wr == ESP_OK ? "OK" : esp_err_to_name(wr));
         }
         s_pressed = false;
     } else {
@@ -64,12 +68,23 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
         if (valid) {
             s_x = x;
             s_y = y;
-            ESP_LOGI(TAG, "TOUCH x=%d y=%d gesture=0x%02x", s_x, s_y, buf[1]);
+            // One line per press (the rising edge), not once per poll —
+            // this fired on every sample of a drag/hold before, dozens of
+            // times per gesture. Continuous coordinates during a hold are
+            // DEBUG-only, for chasing drag/gesture issues specifically.
+            if (!s_was_valid) {
+                LOGI(TAG, "touch down x=%d y=%d gesture=0x%02x", s_x, s_y, buf[1]);
+            } else {
+                LOGD(TAG, "touch move x=%d y=%d", s_x, s_y);
+            }
+            s_was_valid = true;
             globals_touch_activity();
             // First tap only wakes the screen when dimmed — don't pass it to
             // LVGL so it doesn't accidentally fire a button while dark.
             s_pressed = !g_screen_dimmed;
         } else {
+            if (s_was_valid) LOGI(TAG, "touch up");
+            s_was_valid = false;
             s_pressed = false;
         }
     }
@@ -97,7 +112,8 @@ void cst820_init(void)
     gpio_config(&io_cfg);
 
     esp_err_t ret = cst820_write_reg(0xFA, 0x01);
-    ESP_LOGI(TAG, "CST820 scan mode: %s", ret == ESP_OK ? "OK" : esp_err_to_name(ret));
+    if (ret == ESP_OK) LOGI(TAG, "scan mode set");
+    else                LOGW(TAG, "scan mode set failed: %s", esp_err_to_name(ret));
 
     // Disable auto-sleep (CST816-family reg 0xFE, DisAutoSleep — any non-zero
     // value keeps it awake). Without this the controller powers down its scan
@@ -105,18 +121,20 @@ void cst820_init(void)
     // which floods the log and adds wake latency. This device is mains-powered,
     // so keeping touch always-on costs nothing.
     ret = cst820_write_reg(0xFE, 0x01);
-    ESP_LOGI(TAG, "CST820 auto-sleep disable: %s", ret == ESP_OK ? "OK" : esp_err_to_name(ret));
+    if (ret == ESP_OK) LOGI(TAG, "auto-sleep disabled");
+    else                LOGW(TAG, "auto-sleep disable failed: %s", esp_err_to_name(ret));
 
     uint8_t id_reg = 0x15, chip_id = 0;
     ret = i2c_master_write_read_device(IO_I2C_PORT, TP_I2C_ADDR,
                                        &id_reg, 1, &chip_id, 1,
                                        pdMS_TO_TICKS(20));
-    ESP_LOGI(TAG, "CST820 chip_id=0x%02x (%s)", chip_id, esp_err_to_name(ret));
+    if (ret == ESP_OK) LOGI(TAG, "chip_id=0x%02x", chip_id);
+    else                LOGW(TAG, "chip_id read failed: %s", esp_err_to_name(ret));
 
     static lv_indev_drv_t drv;
     lv_indev_drv_init(&drv);
     drv.type    = LV_INDEV_TYPE_POINTER;
     drv.read_cb = touch_read_cb;
     lv_indev_drv_register(&drv);
-    ESP_LOGI(TAG, "CST820 registered (INT=GPIO%d)", TP_INT_GPIO);
+    LOGI(TAG, "registered (INT=GPIO%d)", TP_INT_GPIO);
 }

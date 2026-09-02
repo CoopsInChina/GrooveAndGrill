@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:oklch(0.97 0.002 90);font-family:Montserrat,system-ui,sans-serif}
+</style>
+</helmet>
+
+<div style="padding:40px 48px 80px;display:flex;flex-direction:column;gap:36px;max-width:1720px">
+
+  <div style="max-width:760px;display:flex;flex-direction:column;gap:10px">
+    <div style="font:600 12px/1 ui-monospace,monospace;letter-spacing:.05em;color:oklch(0.5 0.12 30);text-transform:uppercase">BBQ screen · temperature display</div>
+    <h1 style="margin:0;font:600 26px/1.3 Montserrat,sans-serif;color:oklch(0.2 0.01 90)">5 alternatives to the concentric-ring gauge</h1>
+    <p style="margin:0;font:400 14px/1.6 Montserrat,sans-serif;color:oklch(0.4 0.01 90)">Your BBQ Box/probe screen currently shows a dual concentric ring (grill = outer, meat = inner) filling toward target, with a meat icon and numeric readout in the centre — recreated below on the left as reference. To its right, five different ways to show the same numbers on the round 480×480 display: a linear fill, a numeral-first minimal dial, a segmented tick ring, a split top/bottom dial, and a full-ring heat gradient with a position marker. Every option shows two states side by side — a meat-only probe, and a probe with a grill-ambient sensor added — since a grill isn't always assigned. All keep the dark theme, Montserrat type, and BBQ accent orange/green from the existing UI.</p>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start">
+
+    <!-- CURRENT (reference) -->
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;align-items:baseline;gap:8px">
+        <div style="font:600 11px/1 ui-monospace,monospace;padding:3px 8px;background:oklch(0.3 0.01 90);color:#fff;border-radius:5px">now</div>
+        <div style="font:500 13px Montserrat,sans-serif;color:oklch(0.4 0.01 90)">Current design</div>
+      </div>
+      <div style="width:400px;height:400px;border-radius:50%;background:#000;position:relative;box-shadow:0 12px 30px -8px rgba(0,0,0,.35);flex:none">
+        <div style="position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 135deg,#3d55b0 0%,#3d55b0 75%,transparent 75%,transparent 100%)"></div>
+        <div style="position:absolute;inset:32px;border-radius:50%;background:conic-gradient(from 135deg,#ff5fa8 0%,#ff5fa8 33%,#3d55b0 33%,#3d55b0 75%,transparent 75%,transparent 100%)"></div>
+        <div style="position:absolute;inset:64px;border-radius:50%;background:#000"></div>
+        <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:8px">
+          <div style="font:600 20px Montserrat,sans-serif;color:#fff">Probe 1</div>
+          <img src="assets/meat-lamb.png" style="width:78px;height:78px;object-fit:contain">
+          <div style="font:500 22px Montserrat,sans-serif;color:#fff">Meat: <span style="color:#ff5fa8">24 C</span></div>
+        </div>
+        <div style="position:absolute;left:58px;bottom:70px;font:500 13px Montserrat,sans-serif;color:#fff">0 C</div>
+        <div style="position:absolute;right:58px;bottom:70px;font:500 13px Montserrat,sans-serif;color:#fff">73 C</div>
+        <div style="position:absolute;left:50%;bottom:34px;transform:translateX(-50%);width:30px;height:30px;border-radius:50%;background:#2196F3;display:flex;align-items:center;justify-content:center;font:600 11px sans-serif;color:#fff">BT</div>
+      </div>
+    </div>
+
+    <!-- 1a Thermometer bar -->
+    <div id="1a" style="display:flex;flex-direction:column;gap:10px;scroll-margin-top:16px">
+      <div style="display:flex;align-items:baseline;gap:8px">
+        <a href="#1a" style="font:600 11px/1 ui-monospace,monospace;padding:3px 8px;background:#1a1a1a;color:#fff;border-radius:5px;text-decoration:none">1a</a>
+        <div style="font:500 13px Montserrat,sans-serif;color:oklch(0.4 0.01 90)">Thermometer bar</div>
+      </div>
+      <div style="display:flex;gap:22px">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+          <div style="font:600 10px ui-monospace,monospace;color:#888;letter-spacing:.04em">MEAT ONLY</div>
+          <div style="width:260px;height:260px;border-radius:50%;background:#000;position:relative;box-shadow:0 12px 30px -8px rgba(0,0,0,.35);flex:none">
+            <div style="position:absolute;left:57px;top:48px;bottom:48px;width:22px;border-radius:11px;background:#222;overflow:hidden">
+              <div style="position:absolute;left:0;right:0;bottom:0;height:33%;background:linear-gradient(180deg,#E87722,#ff9a4d)"></div>
+            </div>
+            <div style="position:absolute;left:38px;top:38px;font:500 10px Montserrat,sans-serif;color:#888">73</div>
+            <div style="position:absolute;left:38px;bottom:38px;font:500 10px Montserrat,sans-serif;color:#888">0</div>
+            <div style="position:absolute;left:97px;top:0;bottom:0;right:20px;display:flex;flex-direction:column;justify-content:center;gap:4px">
+              <div style="font:500 11px Montserrat,sans-serif;color:#888">Meat</div>
+              <div style="font:700 54px Montserrat,sans-serif;color:#fff;line-height:1">24<span style="font:500 20px Montserrat,sans-serif;color:#666">°C</span></div>
+              <div style="font:500 10px Montserrat,sans-serif;color:#E87722">target 73°C</div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+          <div style="font:600 10px ui-monospace,monospace;color:#888;letter-spacing:.04em">+ GRILL SENSOR</div>
+          <div style="width:260px;height:260px;border-radius:50%;background:#000;position:relative;box-shadow:0 12px 30px -8px rgba(0,0,0,.35);flex:none">
+            <div style="position:absolute;left:48px;top:48px;bottom:48px;width:16px;border-radius:8px;background:#222;overflow:hidden">
+              <div style="position:absolute;left:0;right:0;bottom:0;height:64%;background:linear-gradient(180deg,#1ED760,#7ef7ab)"></div>
+            </div>
+            <div style="position:absolute;left:68px;top:48px;bottom:48px;width:16px;border-radius:8px;background:#222;overflow:hidden">
+              <div style="position:absolute;left:0;right:0;bottom:0;height:33%;background:linear-gradient(180deg,#E87722,#ff9a4d)"></div>
+            </div>
+            <div style="position:absolute;left:104px;top:0;bottom:0;right:20px;display:flex;flex-direction:column;justify-content:center;gap:10px">
+              <div>
+                <div style="font:500 10px Montserrat,sans-serif;color:#7ef7ab">Grill</div>
+                <div style="font:700 28px Montserrat,sans-serif;color:#1ED760;line-height:1">225°</div>
+              </div>
+              <div>
+                <div style="font:500 10px Montserrat,sans-serif;color:#ff9a4d">Meat</div>
+                <div style="font:700 28px Montserrat,sans-serif;color:#E87722;line-height:1">24°</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="font:400 12px/1.5 Montserrat,sans-serif;color:oklch(0.45 0.01 90);max-width:400px">A vertical fill capsule reads at a glance like a physical meat thermometer; the numeral takes the space the ring used to occupy.</div>
+    </div>
+
+    <!-- 1b Numeral-first minimal dial -->
+    <div id="1b" style="display:flex;flex-direction:column;gap:10px;scroll-margin-top:16px">
+      <div style="display:flex;align-items:baseline;gap:8px">
+        <a href="#1b" style="font:600 11px/1 ui-monospace,monospace;padding:3px 8px;background:#1a1a1a;color:#fff;border-radius:5px;text-decoration:none">1b</a>
+        <div style="font:500 13px Montserrat,sans-serif;color:oklch(0.4 0.01 90)">Numeral-first dial</div>
+      </div>
+      <div style="display:flex;gap:22px">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+          <div style="font:600 10px ui-monospace,monospace;color:#888;letter-spacing:.04em">MEAT ONLY</div>
+          <div style="width:260px;height:260px;border-radius:50%;background:#000;position:relative;box-shadow:0 12px 30px -8px rgba(0,0,0,.35);flex:none">
+            <div style="position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 135deg,#333 0%,#333 75%,transparent 75%,transparent 100%)"></div>
+            <div style="position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 135deg,#E87722 0%,#E87722 33%,transparent 33%,transparent 100%)"></div>
+            <div style="position:absolute;inset:20px;border-radius:50%;background:#000"></div>
+            <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:2px">
+              <div style="font:500 11px Montserrat,sans-serif;color:#888;letter-spacing:.04em">PROBE 1</div>
+              <div style="font:700 70px Montserrat,sans-serif;color:#fff;line-height:1">24</div>
+              <div style="font:500 11px Montserrat,sans-serif;color:#E87722">of 73°C target</div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+          <div style="font:600 10px ui-monospace,monospace;color:#888;letter-spacing:.04em">+ GRILL SENSOR</div>
+          <div style="width:260px;height:260px;border-radius:50%;background:#000;position:relative;box-shadow:0 12px 30px -8px rgba(0,0,0,.35);flex:none">
+            <div style="position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 135deg,#123a24 0%,#123a24 75%,transparent 75%,transparent 100%)"></div>
+            <div style="position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 135deg,#1ED760 0%,#1ED760 64%,transparent 64%,transparent 100%)"></div>
+            <div style="position:absolute;inset:18px;border-radius:50%;background:conic-gradient(from 135deg,#3a2015 0%,#3a2015 75%,transparent 75%,transparent 100%)"></div>
+            <div style="position:absolute;inset:18px;border-radius:50%;background:conic-gradient(from 135deg,#E87722 0%,#E87722 33%,transparent 33%,transparent 100%)"></div>
+            <div style="position:absolute;inset:36px;border-radius:50%;background:#000"></div>
+            <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:4px">
+              <div style="font:600 20px Montserrat,sans-serif;color:#1ED760;line-height:1">225°</div>
+              <div style="font:700 46px Montserrat,sans-serif;color:#E87722;line-height:1">24°</div>
+              <div style="font:500 10px Montserrat,sans-serif;color:#888">grill · meat</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="font:400 12px/1.5 Montserrat,sans-serif;color:oklch(0.45 0.01 90);max-width:400px">The ring shrinks to a hairline accent; the number itself is the hero — readable across a patio at a glance.</div>
+    </div>
+
+    <!-- 1c Segmented tick ring -->
+    <div id="1c" style="display:flex;flex-direction:column;gap:10px;scroll-margin-top:16px">
+      <div style="display:flex;align-items:baseline;gap:8px">
+        <a href="#1c" style="font:600 11px/1 ui-monospace,monospace;padding:3px 8px;background:#1a1a1a;color:#fff;border-radius:5px;text-decoration:none">1c</a>
+        <div style="font:500 13px Montserrat,sans-serif;color:oklch(0.4 0.01 90)">Segmented tick ring</div>
+      </div>
+      <div style="display:flex;gap:22px">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+          <div style="font:600 10px ui-monospace,monospace;color:#888;letter-spacing:.04em">MEAT ONLY</div>
+          <div style="width:260px;height:260px;border-radius:50%;background:#000;position:relative;box-shadow:0 12px 30px -8px rgba(0,0,0,.35);flex:none">
+            <sc-for list="{{ ticks1cSolo }}" as="t" hint-placeholder-count="22">
+              <div style="position:absolute;left:130px;top:130px;width:{{ t.w }}px;height:{{ t.len }}px;border-radius:2px;transform:{{ t.transform }};background:{{ t.color }}"></div>
+            </sc-for>
+            <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:6px">
+              <div style="width:22px;height:22px;border-radius:50%;background:#2196F3;display:flex;align-items:center;justify-content:center;font:700 8px sans-serif;color:#fff">B</div>
+              <img src="assets/meat-lamb.png" style="width:42px;height:42px;object-fit:contain">
+              <div style="font:700 38px Montserrat,sans-serif;color:#fff;line-height:1">24°C</div>
+              <div style="font:500 10px Montserrat,sans-serif;color:#E87722">target 73°C</div>
+            </div>
+            <div style="position:absolute;left:50%;bottom:20px;transform:translateX(-50%);width:32px;height:32px;border-radius:50%;background:transparent;border:1px solid #333;display:flex;align-items:center;justify-content:center;font:600 13px sans-serif;color:#888">⌂</div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+          <div style="font:600 10px ui-monospace,monospace;color:#888;letter-spacing:.04em">+ GRILL SENSOR</div>
+          <div style="width:260px;height:260px;border-radius:50%;background:#000;position:relative;box-shadow:0 12px 30px -8px rgba(0,0,0,.35);flex:none">
+            <sc-for list="{{ ticks1cOuter }}" as="t" hint-placeholder-count="24">
+              <div style="position:absolute;left:130px;top:130px;width:{{ t.w }}px;height:{{ t.len }}px;border-radius:2px;transform:{{ t.transform }};background:{{ t.color }}"></div>
+            </sc-for>
+            <sc-for list="{{ ticks1cInner }}" as="t" hint-placeholder-count="18">
+              <div style="position:absolute;left:130px;top:130px;width:{{ t.w }}px;height:{{ t.len }}px;border-radius:2px;transform:{{ t.transform }};background:{{ t.color }}"></div>
+            </sc-for>
+            <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:4px">
+              <div style="display:flex;gap:6px">
+                <div style="width:18px;height:18px;border-radius:50%;background:#2196F3;border:2px solid #1ED760;display:flex;align-items:center;justify-content:center;font:700 6px sans-serif;color:#fff">B</div>
+                <div style="width:18px;height:18px;border-radius:50%;background:#2196F3;border:2px solid #E87722;display:flex;align-items:center;justify-content:center;font:700 6px sans-serif;color:#fff">B</div>
+              </div>
+              <img src="assets/meat-lamb.png" style="width:34px;height:34px;object-fit:contain">
+              <div style="font:600 16px Montserrat,sans-serif;color:#1ED760;line-height:1">225°</div>
+              <div style="font:700 30px Montserrat,sans-serif;color:#E87722;line-height:1">24°</div>
+              <div style="font:500 9px Montserrat,sans-serif;color:#888">grill · meat</div>
+            </div>
+            <div style="position:absolute;left:50%;bottom:20px;transform:translateX(-50%);width:32px;height:32px;border-radius:50%;background:transparent;border:1px solid #333;display:flex;align-items:center;justify-content:center;font:600 13px sans-serif;color:#888">⌂</div>
+          </div>
+        </div>
+      </div>
+      <div style="font:400 12px/1.5 Montserrat,sans-serif;color:oklch(0.45 0.01 90);max-width:400px">Discrete ticks light up one by one instead of a smooth fill — reads more like a mechanical dial, and progress is countable rather than estimated.</div>
+    </div>
+
+    <!-- 1d Split dual dial -->
+    <div id="1d" style="display:flex;flex-direction:column;gap:10px;scroll-margin-top:16px">
+      <div style="display:flex;align-items:baseline;gap:8px">
+        <a href="#1d" style="font:600 11px/1 ui-monospace,monospace;padding:3px 8px;background:#1a1a1a;color:#fff;border-radius:5px;text-decoration:none">1d</a>
+        <div style="font:500 13px Montserrat,sans-serif;color:oklch(0.4 0.01 90)">Split top/bottom dial</div>
+      </div>
+      <div style="display:flex;gap:22px">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+          <div style="font:600 10px ui-monospace,monospace;color:#888;letter-spacing:.04em">MEAT ONLY</div>
+          <div style="width:260px;height:260px;border-radius:50%;background:#1a0f08;position:relative;box-shadow:0 12px 30px -8px rgba(0,0,0,.35);flex:none;display:flex;align-items:center;justify-content:center">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+              <div style="font:500 11px Montserrat,sans-serif;color:#a8636a;letter-spacing:.04em">MEAT</div>
+              <div style="font:700 56px Montserrat,sans-serif;color:#E87722;line-height:1">24°C</div>
+              <div style="font:500 10px Montserrat,sans-serif;color:#a8636a">target 73°C</div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+          <div style="font:600 10px ui-monospace,monospace;color:#888;letter-spacing:.04em">+ GRILL SENSOR</div>
+          <div style="width:260px;height:260px;border-radius:50%;background:#000;position:relative;box-shadow:0 12px 30px -8px rgba(0,0,0,.35);flex:none;overflow:hidden">
+            <div style="position:absolute;left:0;top:0;width:100%;height:50%;background:#0d1a12;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border-bottom:2px solid #000">
+              <div style="position:absolute;left:0;bottom:0;width:64%;height:100%;background:#123a24"></div>
+              <div style="font:500 10px Montserrat,sans-serif;color:#8fdba8;letter-spacing:.04em;z-index:1">GRILL</div>
+              <div style="font:700 32px Montserrat,sans-serif;color:#1ED760;z-index:1">225<span style="font:500 14px Montserrat,sans-serif;color:#5c9c74">°C</span></div>
+              <div style="font:500 9px Montserrat,sans-serif;color:#5c9c74;z-index:1">target 350°C</div>
+            </div>
+            <div style="position:absolute;left:0;top:50%;width:100%;height:50%;background:#210d13;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px">
+              <div style="position:absolute;left:0;top:0;width:33%;height:100%;background:#4a1f27"></div>
+              <div style="font:500 10px Montserrat,sans-serif;color:#f3a0ab;letter-spacing:.04em;z-index:1">MEAT</div>
+              <div style="font:700 32px Montserrat,sans-serif;color:#E53935;z-index:1">24<span style="font:500 14px Montserrat,sans-serif;color:#a8636a">°C</span></div>
+              <div style="font:500 9px Montserrat,sans-serif;color:#a8636a;z-index:1">target 73°C</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="font:400 12px/1.5 Montserrat,sans-serif;color:oklch(0.45 0.01 90);max-width:400px">Grill and meat get equal, separately-legible halves instead of nesting one ring inside another — clearer once a grill-ambient sensor is assigned alongside the meat probe.</div>
+    </div>
+
+    <!-- 1e Heat gradient ring + marker -->
+    <div id="1e" style="display:flex;flex-direction:column;gap:10px;scroll-margin-top:16px">
+      <div style="display:flex;align-items:baseline;gap:8px">
+        <a href="#1e" style="font:600 11px/1 ui-monospace,monospace;padding:3px 8px;background:#1a1a1a;color:#fff;border-radius:5px;text-decoration:none">1e</a>
+        <div style="font:500 13px Montserrat,sans-serif;color:oklch(0.4 0.01 90)">Heat-gradient ring + marker</div>
+      </div>
+      <div style="display:flex;gap:22px">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+          <div style="font:600 10px ui-monospace,monospace;color:#888;letter-spacing:.04em">MEAT ONLY</div>
+          <div style="width:260px;height:260px;border-radius:50%;background:#000;position:relative;box-shadow:0 12px 30px -8px rgba(0,0,0,.35);flex:none">
+            <div style="position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 135deg,#2196F3 0%,#E87722 50%,#E53935 75%,transparent 75%,transparent 100%);opacity:.9"></div>
+            <div style="position:absolute;inset:20px;border-radius:50%;background:#000"></div>
+            <div style="position:absolute;left:130px;top:130px;width:12px;height:12px;border-radius:50%;background:#fff;box-shadow:0 0 0 3px #000,0 0 8px 2px #fff;transform:rotate(224deg) translate(0,-120px)"></div>
+            <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:4px">
+              <div style="font:500 11px Montserrat,sans-serif;color:#888;letter-spacing:.04em">PROBE 1</div>
+              <div style="font:700 42px Montserrat,sans-serif;color:#fff;line-height:1">24°C</div>
+              <div style="font:500 11px Montserrat,sans-serif;color:#888">0–73°C range</div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+          <div style="font:600 10px ui-monospace,monospace;color:#888;letter-spacing:.04em">+ GRILL SENSOR</div>
+          <div style="width:260px;height:260px;border-radius:50%;background:#000;position:relative;box-shadow:0 12px 30px -8px rgba(0,0,0,.35);flex:none">
+            <div style="position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 135deg,#2196F3 0%,#1ED760 50%,#E87722 75%,transparent 75%,transparent 100%);opacity:.9"></div>
+            <div style="position:absolute;inset:18px;border-radius:50%;background:conic-gradient(from 135deg,#2196F3 0%,#E87722 50%,#E53935 75%,transparent 75%,transparent 100%);opacity:.9"></div>
+            <div style="position:absolute;inset:36px;border-radius:50%;background:#000"></div>
+            <div style="position:absolute;left:130px;top:130px;width:10px;height:10px;border-radius:50%;background:#fff;box-shadow:0 0 0 2px #000,0 0 6px 2px #fff;transform:rotate(308deg) translate(0,-121px)"></div>
+            <div style="position:absolute;left:130px;top:130px;width:10px;height:10px;border-radius:50%;background:#fff;box-shadow:0 0 0 2px #000,0 0 6px 2px #fff;transform:rotate(224deg) translate(0,-103px)"></div>
+            <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:3px">
+              <div style="font:600 16px Montserrat,sans-serif;color:#1ED760;line-height:1">225°</div>
+              <div style="font:700 30px Montserrat,sans-serif;color:#E87722;line-height:1">24°</div>
+              <div style="font:500 9px Montserrat,sans-serif;color:#888">grill · meat</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="font:400 12px/1.5 Montserrat,sans-serif;color:oklch(0.45 0.01 90);max-width:400px">The ring itself always shows cool→hot as colour; a single marker dot shows where the current reading sits on that gradient, rather than a growing fill.</div>
+    </div>
+
+  </div>
+
+  <p style="margin:0;font:400 12px Montserrat,sans-serif;color:oklch(0.5 0.01 90);max-width:760px">Try next: "combine 1a's numeral size with 1e's ring" · "show 1c's tick ring with the alarm-flash state" · "apply 1d to the current grill+meat dual-probe screens"</p>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  buildTicks(total, litFrac, litColor, dimColor, radius, len, w) {
+    const litCount = Math.round(total * litFrac);
+    const ticks = [];
+    for (let i = 0; i < total; i++) {
+      const angle = 135 + (270 * i) / (total - 1);
+      const color = i < litCount ? litColor : dimColor;
+      const transform = `rotate(${angle}deg) translate(${-w / 2}px,${-radius}px)`;
+      ticks.push({ transform, color, len, w });
+    }
+    return ticks;
+  }
+  renderVals() {
+    return {
+      ticks1cSolo: this.buildTicks(22, 0.33, '#E87722', '#2a2a2a', 116, 16, 4),
+      ticks1cOuter: this.buildTicks(24, 0.64, '#1ED760', '#123a24', 120, 14, 4),
+      ticks1cInner: this.buildTicks(18, 0.33, '#E87722', '#3a2015', 92, 14, 4),
+    };
+  }
+}
+
+</script>
+</body>
+</html>

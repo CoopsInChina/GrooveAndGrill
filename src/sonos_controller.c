@@ -17,7 +17,7 @@
 #include "ui_network_guard.h"
 #include "app_config.h"
 #include "nvs.h"
-#include "esp_log.h"
+#include "app_log.h"
 #include "esp_http_client.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
@@ -269,7 +269,7 @@ static int send_soap(const char *service, const char *action,
 
     net_pre_wait("SOAP", NET_WAIT_GENERAL);
     if (!xSemaphoreTake(g_network_mutex, pdMS_TO_TICKS(NETWORK_MUTEX_TIMEOUT_MS))) {
-        ESP_LOGW(TAG, "SOAP: mutex timeout for %s.%s", service, action);
+        LOGW(TAG, "SOAP: mutex timeout for %s.%s", service, action);
         return -1;
     }
 
@@ -301,7 +301,7 @@ static int send_soap(const char *service, const char *action,
     xSemaphoreGive(g_network_mutex);
 
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "SOAP HTTP err %d for %s.%s", err, service, action);
+        LOGW(TAG, "SOAP HTTP err %d for %s.%s", err, service, action);
         s_speakers[s_active_idx].error_count++;
         if (s_speakers[s_active_idx].error_count > 5)
             s_speakers[s_active_idx].connected = false;
@@ -316,9 +316,9 @@ static int send_soap(const char *service, const char *action,
             resp_buf[resp_sz - 1] = '\0';
         }
     } else if (code == 500) {
-        ESP_LOGD(TAG, "SOAP 500 (transient) %s.%s", service, action);
+        LOGW(TAG, "SOAP 500 (transient) %s.%s", service, action);
     } else {
-        ESP_LOGW(TAG, "SOAP %d for %s.%s", code, service, action);
+        LOGW(TAG, "SOAP %d for %s.%s", code, service, action);
         s_speakers[s_active_idx].error_count++;
     }
 
@@ -371,18 +371,18 @@ static void fetch_room_name(const char *ip, char *name_buf, size_t name_sz,
 
 bool sonos_controller_discover(uint32_t timeout_ms)
 {
-    ESP_LOGI(TAG, "Discovery starting (%lums)...", (unsigned long)timeout_ms);
+    LOGI(TAG, "Discovery starting (%lums)...", (unsigned long)timeout_ms);
     s_speaker_count = 0;
     s_active_idx    = -1;
 
     if (!xSemaphoreTake(g_network_mutex, pdMS_TO_TICKS(20000))) {
-        ESP_LOGE(TAG, "Discovery: could not acquire network mutex");
+        LOGE(TAG, "Discovery: could not acquire network mutex");
         return false;
     }
 
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock < 0) {
-        ESP_LOGE(TAG, "Discovery socket() failed: %d", errno);
+        LOGE(TAG, "Discovery socket() failed: %d", errno);
         xSemaphoreGive(g_network_mutex);
         return false;
     }
@@ -423,7 +423,7 @@ bool sonos_controller_discover(uint32_t timeout_ms)
                (struct sockaddr *)&mcast,      sizeof(mcast));
         sendto(sock, msearch, strlen(msearch), 0,
                (struct sockaddr *)&bcast_addr, sizeof(bcast_addr));
-        ESP_LOGI(TAG, "SSDP burst %d/3", burst + 1);
+        LOGI(TAG, "SSDP burst %d/3", burst + 1);
         if (burst < 2) vTaskDelay(pdMS_TO_TICKS(500));
     }
 
@@ -456,7 +456,7 @@ bool sonos_controller_discover(uint32_t timeout_ms)
                 sizeof(s_speakers[s_speaker_count].ip) - 1);
         s_speakers[s_speaker_count].connected   = false;
         s_speakers[s_speaker_count].error_count = 0;
-        ESP_LOGI(TAG, "Found: %s", ip_str);
+        LOGI(TAG, "Found: %s", ip_str);
         s_speaker_count++;
     }
 
@@ -464,7 +464,7 @@ bool sonos_controller_discover(uint32_t timeout_ms)
     g_last_network_end_ms = ms_now();
     xSemaphoreGive(g_network_mutex);
 
-    ESP_LOGI(TAG, "Discovery: %d device(s) found", s_speaker_count);
+    LOGI(TAG, "Discovery: %d device(s) found", s_speaker_count);
     if (s_speaker_count == 0) {
         // SSDP found nothing — fall back to last-known IP from NVS
         char saved_ip[24] = {0};
@@ -475,10 +475,10 @@ bool sonos_controller_discover(uint32_t timeout_ms)
             nvs_close(nvs);
         }
         if (!saved_ip[0]) {
-            ESP_LOGI(TAG, "Discovery: no speakers found, no NVS fallback");
+            LOGW(TAG, "Discovery: no speakers found, no NVS fallback");
             return false;
         }
-        ESP_LOGI(TAG, "Discovery: SSDP found 0, probing NVS IP %s", saved_ip);
+        LOGI(TAG, "Discovery: SSDP found 0, probing NVS IP %s", saved_ip);
         memset(&s_speakers[0], 0, sizeof(s_speakers[0]));
         strncpy(s_speakers[0].ip, saved_ip, sizeof(s_speakers[0].ip) - 1);
         fetch_room_name(saved_ip, s_speakers[0].name, sizeof(s_speakers[0].name),
@@ -487,7 +487,7 @@ bool sonos_controller_discover(uint32_t timeout_ms)
         s_speakers[0].error_count = 0;
         s_speaker_count = 1;
         s_active_idx    = 0;
-        ESP_LOGI(TAG, "NVS fallback: active speaker %s (%s)",
+        LOGI(TAG, "NVS fallback: active speaker %s (%s)",
                  s_speakers[0].name, saved_ip);
         return true;
     }
@@ -497,7 +497,7 @@ bool sonos_controller_discover(uint32_t timeout_ms)
         fetch_room_name(s_speakers[i].ip,
                         s_speakers[i].name, sizeof(s_speakers[i].name),
                         s_speakers[i].uuid, sizeof(s_speakers[i].uuid));
-        ESP_LOGI(TAG, "  [%d] %s (%s) %s", i, s_speakers[i].name,
+        LOGI(TAG, "  [%d] %s (%s) %s", i, s_speakers[i].name,
                  s_speakers[i].ip, s_speakers[i].uuid);
     }
 
@@ -515,7 +515,7 @@ bool sonos_controller_discover(uint32_t timeout_ms)
         for (int i = 0; i < s_speaker_count; i++) {
             if (strcmp(s_speakers[i].ip, saved_ip) == 0) {
                 s_active_idx = i;
-                ESP_LOGI(TAG, "Restored cached speaker: %s", s_speakers[i].name);
+                LOGI(TAG, "Restored cached speaker: %s", s_speakers[i].name);
                 break;
             }
         }
@@ -675,9 +675,9 @@ static void spiffs_art_init(void)
     };
     esp_err_t ret = esp_vfs_spiffs_register(&conf);
     if (ret != ESP_OK)
-        ESP_LOGE(TAG, "SPIFFS mount failed: %s", esp_err_to_name(ret));
+        LOGE(TAG, "SPIFFS mount failed: %s", esp_err_to_name(ret));
     else
-        ESP_LOGI(TAG, "Art SPIFFS mounted at /art");
+        LOGI(TAG, "Art SPIFFS mounted at /art");
 }
 
 static void spiffs_art_path(int idx, char *buf, size_t sz)
@@ -695,7 +695,7 @@ static void load_art_from_spiffs(void)
         size_t n = fread(s_dev_fav_art_data[i], 1, ART_MAX_BYTES, f);
         fclose(f);
         s_dev_fav_art_sz[i] = n;
-        ESP_LOGI(TAG, "Art[%d]: %zu bytes from SPIFFS", i, n);
+        LOGI(TAG, "Art[%d]: %zu bytes from SPIFFS", i, n);
     }
 }
 
@@ -736,7 +736,7 @@ static void load_device_favourites(void)
         s_dev_fav_count++;
     }
     nvs_close(nvs);
-    ESP_LOGI(TAG, "Loaded %d device favourites", s_dev_fav_count);
+    LOGI(TAG, "Loaded %d device favourites", s_dev_fav_count);
     load_art_from_spiffs();
 }
 
@@ -745,19 +745,19 @@ static void load_device_favourites(void)
 static bool fetch_favourites(void)
 {
     if (!g_api_server[0]) {
-        ESP_LOGW(TAG, "fetch_fav: no api server");
+        LOGW(TAG, "fetch_fav: no api server");
         return true;  // not a transient failure — no point retrying
     }
     static char url[128];
     snprintf(url, sizeof(url), "http://%s/favorites", g_api_server);
-    ESP_LOGI(TAG, "fetch_fav: GET %s", url);
+    LOGI(TAG, "fetch_fav: GET %s", url);
 
     char *resp = s_fav_fetch_resp;
     http_ctx_t ctx = { resp, 0, HTTP_RESP_BUF_SZ };
     resp[0] = '\0';
 
     if (!xSemaphoreTake(g_network_mutex, pdMS_TO_TICKS(6000))) {
-        ESP_LOGW(TAG, "fetch_fav: mutex timeout");
+        LOGW(TAG, "fetch_fav: mutex timeout");
         return false;
     }
     net_pre_wait("FAV", NET_WAIT_GENERAL);
@@ -771,7 +771,7 @@ static bool fetch_favourites(void)
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) {
-        ESP_LOGE(TAG, "URL parse failed: %s", url);
+        LOGW(TAG, "URL parse failed: %s", url);
         g_last_network_end_ms = ms_now();
         xSemaphoreGive(g_network_mutex);
         return true;
@@ -783,10 +783,10 @@ static bool fetch_favourites(void)
     xSemaphoreGive(g_network_mutex);
 
     if (err != ESP_OK || code != 200) {
-        ESP_LOGW(TAG, "fetch_fav: failed err=%d code=%d", (int)err, code);
+        LOGW(TAG, "fetch_fav: failed err=%d code=%d", (int)err, code);
         return true;
     }
-    ESP_LOGI(TAG, "fetch_fav: resp(%d bytes): %.120s", ctx.len, resp);
+    LOGI(TAG, "fetch_fav: resp(%d bytes): %.120s", ctx.len, resp);
 
     // Parse response — two formats supported:
     // Object array: [{"title":"BBC Radio 2","uri":"..."},...] → extract "title" field
@@ -859,7 +859,7 @@ static bool fetch_favourites(void)
             p = end + 1;
         }
     }
-    ESP_LOGI(TAG, "Loaded %d favourites", s_fav_count);
+    LOGI(TAG, "Loaded %d favourites", s_fav_count);
     return true;
 }
 
@@ -947,7 +947,7 @@ static bool play_custom_favourite_direct(int di)
     char added[8] = {0}, qlen[8] = {0};
     extract_xml(resp, "NumTracksAdded", added, sizeof(added));
     extract_xml(resp, "NewQueueLength", qlen,  sizeof(qlen));
-    ESP_LOGI(TAG, "AddURIToQueue: added=%s newLen=%s", added, qlen);
+    LOGI(TAG, "AddURIToQueue: added=%s newLen=%s", added, qlen);
 
     snprintf(args, sizeof(args),
         "<InstanceID>0</InstanceID>"
@@ -965,7 +965,7 @@ static bool play_custom_favourite_direct(int di)
                               "<InstanceID>0</InstanceID><Speed>1</Speed>",
                               resp, sizeof(resp));
 
-    ESP_LOGI(TAG, "Play custom fav[%d] direct: %s (play=%d) %s",
+    LOGI(TAG, "Play custom fav[%d] direct: %s (play=%d) %s",
              di, s_dev_fav_names[di], play_code, uri);
     return true;
 }
@@ -982,7 +982,7 @@ static void do_play_favourite(int index)
     }
 
     if (!g_api_server[0]) {
-        ESP_LOGW(TAG, "Play favourite[%d]: no direct path and no API server", index);
+        LOGW(TAG, "Play favourite[%d]: no direct path and no API server", index);
         return;
     }
 
@@ -1011,7 +1011,7 @@ static void do_play_favourite(int index)
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) {
-        ESP_LOGE(TAG, "URL parse failed: %s", url);
+        LOGW(TAG, "URL parse failed: %s", url);
         g_last_network_end_ms = ms_now();
         xSemaphoreGive(g_network_mutex);
         return;
@@ -1021,7 +1021,7 @@ static void do_play_favourite(int index)
     g_last_network_end_ms = ms_now();
     xSemaphoreGive(g_network_mutex);
 
-    ESP_LOGI(TAG, "Play favourite[%d]: %s", index, sonos_favourite_name(index));
+    LOGI(TAG, "Play favourite[%d]: %s", index, sonos_favourite_name(index));
 }
 
 // ---- Direct SOAP commands ------------------------------------------
@@ -1110,7 +1110,7 @@ static bool fetch_fav_art(void)
 
     net_pre_wait("FAV_ART", NET_WAIT_GENERAL);
     if (!xSemaphoreTake(g_network_mutex, pdMS_TO_TICKS(6000))) {
-        ESP_LOGW(TAG, "fetch_fav_art: mutex timeout");
+        LOGW(TAG, "fetch_fav_art: mutex timeout");
         return false;   // caller should retry
     }
     esp_http_client_config_t cfg = {
@@ -1139,18 +1139,18 @@ static bool fetch_fav_art(void)
     xSemaphoreGive(g_network_mutex);
 
     if (err != ESP_OK || code != 200) {
-        ESP_LOGW(TAG, "fetch_fav_art: failed err=%d code=%d", (int)err, code);
+        LOGW(TAG, "fetch_fav_art: failed err=%d code=%d", (int)err, code);
         return true;    // not a mutex issue; don't retry
     }
-    ESP_LOGD(TAG, "fetch_fav_art: resp %d bytes", ctx.len);
+    LOGD(TAG, "fetch_fav_art: resp %d bytes", ctx.len);
 
     // <Result> contains HTML-entity-encoded DIDL-Lite XML.
     // Move it to the front of the buffer and decode in-place.
     const char *rs = strstr(s_browse_resp, "<Result>");
-    if (!rs) { ESP_LOGW(TAG, "fetch_fav_art: no <Result>"); return true; }
+    if (!rs) { LOGW(TAG, "fetch_fav_art: no <Result>"); return true; }
     rs += 8;
     const char *re = strstr(rs, "</Result>");
-    if (!re) { ESP_LOGW(TAG, "fetch_fav_art: no </Result>"); return true; }
+    if (!re) { LOGW(TAG, "fetch_fav_art: no </Result>"); return true; }
     size_t rlen = (size_t)(re - rs);
     memmove(s_browse_resp, rs, rlen);
     s_browse_resp[rlen] = '\0';
@@ -1204,7 +1204,7 @@ static bool fetch_fav_art(void)
                 if (strcasecmp(s_fav_names[i], title) == 0) {
                     strncpy(s_fav_art[i], art, sizeof(s_fav_art[i]) - 1);
                     s_fav_art[i][sizeof(s_fav_art[i]) - 1] = '\0';
-                    ESP_LOGI(TAG, "fav_art[%d] %s → %.100s", i, title, art);
+                    LOGI(TAG, "fav_art[%d] %s → %.100s", i, title, art);
                     matched++;
                     break;
                 }
@@ -1213,7 +1213,7 @@ static bool fetch_fav_art(void)
 
         p = end + 7;  // advance past </item>
     }
-    ESP_LOGI(TAG, "fetch_fav_art: matched %d/%d", matched, s_fav_count);
+    LOGI(TAG, "fetch_fav_art: matched %d/%d", matched, s_fav_count);
     return true;
 }
 
@@ -1241,13 +1241,13 @@ static void trigger_fetch_favs(void)
     s_fetch_task_running = true;
     if (xTaskCreate(fetch_favs_task, "fav_fetch", 6144, NULL, 4, NULL) != pdPASS) {
         s_fetch_task_running = false;
-        ESP_LOGW(TAG, "trigger_fetch: out of memory");
+        LOGE(TAG, "trigger_fetch: out of memory");
     }
 }
 
 static void poll_task(void *arg)
 {
-    ESP_LOGI(TAG, "poll_task: started");
+    LOGI(TAG, "poll_task: started");
     vTaskDelay(pdMS_TO_TICKS(2000));
 
     // Fire an initial favourites fetch in the background; clear the requested
@@ -1272,7 +1272,7 @@ static void poll_task(void *arg)
         if (s_need_reconnect) {
             s_need_reconnect = false;
             last_probe_ms    = 0;
-            ESP_LOGI(TAG, "WiFi reconnect: probing speaker");
+            LOGI(TAG, "WiFi reconnect: probing speaker");
         }
 
         if (s_active_idx >= 0 && s_speakers[s_active_idx].connected) {
@@ -1289,7 +1289,7 @@ static void poll_task(void *arg)
             uint32_t now = ms_now();
             if (now - last_probe_ms >= 30000) {
                 last_probe_ms = now;
-                ESP_LOGI(TAG, "Probe: reconnecting to %s",
+                LOGI(TAG, "Probe: reconnecting to %s",
                          s_speakers[s_active_idx].ip);
                 update_track_info();
             }
@@ -1368,7 +1368,7 @@ static bool verify_api_server(const char *ip)
 
     // node-sonos-http-api /zones returns a JSON array starting with '['
     bool ok = (err == ESP_OK && code == 200 && resp[0] == '[');
-    ESP_LOGI(TAG, "verify_api %s → %s", ip, ok ? "OK" : "FAIL");
+    LOGI(TAG, "verify_api %s → %s", ip, ok ? "OK" : "FAIL");
     return ok;
 }
 
@@ -1381,7 +1381,7 @@ static void save_api_server(const char *ip)
         nvs_commit(nvs);
         nvs_close(nvs);
     }
-    ESP_LOGI(TAG, "API server saved: %s", g_api_server);
+    LOGI(TAG, "API server saved: %s", g_api_server);
     s_fetch_favs_requested = true;  // signal poll_task to fetch favourites immediately
 }
 
@@ -1399,7 +1399,7 @@ static void api_scan_task(void *arg)
     // Recalculate own_octet from original ip string
     own_octet = atoi(strrchr(my_ip, '.') + 1);
 
-    ESP_LOGI(TAG, "API scan: %sx :%d", prefix, SONOS_API_PORT);
+    LOGI(TAG, "API scan: %sx :%d", prefix, SONOS_API_PORT);
 
     char host[24];
     for (int i = 1; i <= 254; i++) {
@@ -1413,7 +1413,7 @@ static void api_scan_task(void *arg)
     }
 
     if (!g_api_server[0])
-        ESP_LOGW(TAG, "API scan complete — server not found");
+        LOGW(TAG, "API scan complete — server not found");
 
     s_api_scan_running = false;
     vTaskDelete(NULL);
@@ -1428,10 +1428,10 @@ bool sonos_api_server_init(const char *my_ip)
         char *colon = strchr(ip_only, ':');
         if (colon) *colon = '\0';
         if (verify_api_server(ip_only)) {
-            ESP_LOGI(TAG, "API server cached + reachable: %s", g_api_server);
+            LOGI(TAG, "API server cached + reachable: %s", g_api_server);
             return true;
         }
-        ESP_LOGW(TAG, "Cached API server %s unreachable — scanning", g_api_server);
+        LOGW(TAG, "Cached API server %s unreachable — scanning", g_api_server);
         g_api_server[0] = '\0';
     }
 
@@ -1441,7 +1441,7 @@ bool sonos_api_server_init(const char *my_ip)
         static char ip_buf[24];
         strlcpy(ip_buf, my_ip, sizeof(ip_buf));
         xTaskCreate(api_scan_task, "api_scan", 4096, ip_buf, 2, NULL);
-        ESP_LOGI(TAG, "API server not cached — background scan started");
+        LOGI(TAG, "API server not cached — background scan started");
     }
     return false;
 }
@@ -1460,12 +1460,12 @@ void sonos_controller_init(void)
     memset(&s_track, 0, sizeof(s_track));
     spiffs_art_init();
     load_device_favourites();   // also calls load_art_from_spiffs()
-    ESP_LOGI(TAG, "Controller initialised");
+    LOGI(TAG, "Controller initialised");
 }
 
 void sonos_controller_start_polling(void)
 {
-    ESP_LOGI(TAG, "DRAM free before tasks: %u bytes",
+    LOGI(TAG, "DRAM free before tasks: %u bytes",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
     if (!s_poll_task) {
@@ -1474,24 +1474,24 @@ void sonos_controller_start_polling(void)
         // the tight internal DRAM left after the BLE controller + LVGL pool.
         BaseType_t r = xTaskCreate(poll_task, "sonos_poll", 6144, NULL, 5, &s_poll_task);
         if (r != pdPASS) {
-            ESP_LOGE(TAG, "poll_task create FAILED — out of internal DRAM");
+            LOGE(TAG, "poll_task create FAILED — out of internal DRAM");
             s_poll_task = NULL;
         }
     }
     if (!s_cmd_task) {
         BaseType_t r = xTaskCreate(cmd_task, "sonos_cmd", 4096, NULL, 6, &s_cmd_task);
         if (r != pdPASS) {
-            ESP_LOGE(TAG, "cmd_task create FAILED — out of internal DRAM");
+            LOGE(TAG, "cmd_task create FAILED — out of internal DRAM");
             s_cmd_task = NULL;
         }
     }
-    ESP_LOGI(TAG, "Background tasks started");
+    LOGI(TAG, "Background tasks started");
 }
 
 void sonos_on_wifi_ready(void)
 {
     s_need_reconnect = true;
-    ESP_LOGI(TAG, "WiFi ready: scheduling reconnect probe");
+    LOGI(TAG, "WiFi ready: scheduling reconnect probe");
 }
 
 static void enqueue(sonos_cmd_type_t type, int arg)
@@ -1536,7 +1536,7 @@ void sonos_select_speaker(int index)
         nvs_commit(nvs);
         nvs_close(nvs);
     }
-    ESP_LOGI(TAG, "Active: %s (%s)", s_speakers[index].name, s_speakers[index].ip);
+    LOGI(TAG, "Active: %s (%s)", s_speakers[index].name, s_speakers[index].ip);
     // Don't create a fetch task here — poll_task hasn't started yet and the
     // fav_fetch stack would hold DRAM until the IDLE task cleans it up,
     // leaving too little for poll_task/cmd_task.  Set the flag instead.
@@ -1594,7 +1594,7 @@ bool sonos_add_device_favourite(const char *name, const char *cmd)
     strlcpy(s_dev_fav_cmds[s_dev_fav_count],  cmd,  sizeof(s_dev_fav_cmds[0]));
     s_dev_fav_count++;
     save_device_favourites();
-    ESP_LOGI(TAG, "Added device fav: %s → %s", name, cmd);
+    LOGI(TAG, "Added device fav: %s → %s", name, cmd);
     return true;
 }
 
@@ -1627,7 +1627,7 @@ bool sonos_remove_device_favourite(int index)
     unlink(old_path);
 
     save_device_favourites();
-    ESP_LOGI(TAG, "Removed device fav[%d]", index);
+    LOGI(TAG, "Removed device fav[%d]", index);
     return true;
 }
 
@@ -1644,10 +1644,10 @@ bool sonos_set_device_fav_art(int idx, const uint8_t *jpeg, size_t sz)
     char path[32];
     spiffs_art_path(idx, path, sizeof(path));
     FILE *f = fopen(path, "wb");
-    if (!f) { ESP_LOGE(TAG, "Cannot write art[%d]: %s", idx, path); return false; }
+    if (!f) { LOGE(TAG, "Cannot write art[%d]: %s", idx, path); return false; }
     fwrite(jpeg, 1, sz, f);
     fclose(f);
-    ESP_LOGI(TAG, "Art[%d] saved: %zu bytes", idx, sz);
+    LOGI(TAG, "Art[%d] saved: %zu bytes", idx, sz);
     return true;
 }
 

@@ -19,6 +19,7 @@ idf_component_register(
         driver
         esp_lcd
         esp_lvgl_port
+        esp_partition
         json
         spiffs
         app_update
