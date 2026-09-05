@@ -332,3 +332,8 @@ void display_unlock(void)
 {
     lvgl_port_unlock();
 }
+
+esp_lcd_panel_handle_t display_get_panel(void)
+{
+    return s_panel;
+}

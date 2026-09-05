@@ -1,6 +1,7 @@
 #pragma once
 
 #include "esp_err.h"
+#include "esp_lcd_panel_ops.h"
 #include <stdbool.h>
 
 // Initialise display hardware and LVGL. Must be called once at startup
@@ -17,3 +18,7 @@ void display_set_brightness(int pct);
 // from outside the LVGL task.
 bool display_lock(uint32_t timeout_ms);
 void display_unlock(void);
+
+// The RGB panel handle, for reading a frame buffer directly (see
+// web_server.c's /screenshot dev endpoint). NULL before display_init().
+esp_lcd_panel_handle_t display_get_panel(void);

@@ -5,6 +5,9 @@
 #include "bbq_controller.h"
 #include "meat_temps.h"
 #include "app_log.h"
+#include "display.h"
+#include "board_config.h"
+#include "esp_lcd_panel_rgb.h"
 #include "esp_attr.h"     // EXT_RAM_BSS_ATTR
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
@@ -941,6 +944,73 @@ static esp_err_t faultlog_clear_handler(httpd_req_t *req)
     return httpd_resp_send(req, NULL, 0);
 }
 
+// ---- GET /screenshot — dev-only: dumps the currently displayed frame as a
+// BMP. LOCAL DEV TOOL, not meant to ship — reads the RGB panel's own PSRAM
+// frame buffer directly (this display runs LVGL in direct_mode/avoid_tearing,
+// so it's a real full-screen framebuffer, not something reconstructed via
+// lv_snapshot_take()). Best used against a settled/static screen; mid-
+// animation there's no guarantee which of the two swap buffers is "front".
+
+static esp_err_t screenshot_get_handler(httpd_req_t *req)
+{
+    esp_lcd_panel_handle_t panel = display_get_panel();
+    if (!panel) return httpd_resp_send_500(req);
+
+    void *fb_void = NULL;
+    if (esp_lcd_rgb_panel_get_frame_buffer(panel, 1, &fb_void) != ESP_OK || !fb_void)
+        return httpd_resp_send_500(req);
+    const uint16_t *fb = (const uint16_t *)fb_void;   // RGB565, no byte-swap (LV_COLOR_16_SWAP off)
+
+    if (!display_lock(pdMS_TO_TICKS(200)))
+        return httpd_resp_send_500(req);
+
+    const int      w = LCD_H_RES, h = LCD_V_RES;
+    const uint32_t row_bytes        = (uint32_t)w * 3;   // 24bpp; 480*3=1440, already 4-byte aligned
+    const uint32_t pixel_data_size  = row_bytes * (uint32_t)h;
+    const uint32_t file_size        = 54 + pixel_data_size;
+
+    // BMP: BITMAPFILEHEADER (14 bytes) + BITMAPINFOHEADER (40 bytes), 24bpp,
+    // uncompressed, negative height = top-down row order (no need to reverse).
+    uint8_t hdr[54] = {0};
+    hdr[0] = 'B'; hdr[1] = 'M';
+    memcpy(&hdr[2],  &file_size, 4);
+    uint32_t data_offset = 54;
+    memcpy(&hdr[10], &data_offset, 4);
+    uint32_t dib_size = 40;
+    memcpy(&hdr[14], &dib_size, 4);
+    int32_t width = w, height = -h;
+    memcpy(&hdr[18], &width, 4);
+    memcpy(&hdr[22], &height, 4);
+    uint16_t planes = 1, bpp = 24;
+    memcpy(&hdr[26], &planes, 2);
+    memcpy(&hdr[28], &bpp, 2);
+    memcpy(&hdr[34], &pixel_data_size, 4);
+
+    httpd_resp_set_type(req, "image/bmp");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"screenshot.bmp\"");
+
+    esp_err_t err = httpd_resp_send_chunk(req, (const char *)hdr, sizeof(hdr));
+
+    uint8_t row[LCD_H_RES * 3];
+    for (int y = 0; err == ESP_OK && y < h; y++) {
+        const uint16_t *src = &fb[y * w];
+        for (int x = 0; x < w; x++) {
+            uint16_t px = src[x];
+            uint8_t  r5 = (px >> 11) & 0x1F;
+            uint8_t  g6 = (px >> 5)  & 0x3F;
+            uint8_t  b5 =  px        & 0x1F;
+            row[x * 3 + 0] = (uint8_t)((b5 << 3) | (b5 >> 2));   // B
+            row[x * 3 + 1] = (uint8_t)((g6 << 2) | (g6 >> 4));   // G
+            row[x * 3 + 2] = (uint8_t)((r5 << 3) | (r5 >> 2));   // R
+        }
+        err = httpd_resp_send_chunk(req, (const char *)row, sizeof(row));
+    }
+
+    display_unlock();
+    if (err != ESP_OK) return err;
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
 // ---- Public API -----------------------------------------------------
 
 bool web_server_start(void)
@@ -971,6 +1041,7 @@ bool web_server_start(void)
         { .uri = "/bbq_source",    .method = HTTP_POST, .handler = bbq_source_handler      },
         { .uri = "/faultlog",       .method = HTTP_GET,  .handler = faultlog_get_handler   },
         { .uri = "/faultlog_clear", .method = HTTP_POST, .handler = faultlog_clear_handler },
+        { .uri = "/screenshot",     .method = HTTP_GET,  .handler = screenshot_get_handler },
     };
     for (int i = 0; i < (int)(sizeof(uris) / sizeof(uris[0])); i++)
         httpd_register_uri_handler(s_server, &uris[i]);
