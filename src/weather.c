@@ -3,7 +3,7 @@
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "esp_sntp.h"
-#include "esp_log.h"
+#include "app_log.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -66,7 +66,7 @@ static int fetch_url(const char *url, char *buf, int max_len, int timeout_ms, bo
     int status = esp_http_client_get_status_code(c);
     esp_http_client_cleanup(c);
     if (err != ESP_OK || status != 200) {
-        ESP_LOGW(TAG, "fetch %s err=%d status=%d", url, err, status);
+        LOGW(TAG, "fetch %s err=%d status=%d", url, err, status);
         return -1;
     }
     return ctx.total;
@@ -81,10 +81,10 @@ static bool fetch_location(char *buf, int buflen,
 {
     int len = fetch_url("http://ip-api.com/json?fields=lat,lon,city,offset",
                         buf, buflen, TZ_TIMEOUT_MS, false);
-    if (len <= 0) { ESP_LOGW(TAG, "ip-api failed"); return false; }
+    if (len <= 0) { LOGW(TAG, "ip-api failed"); return false; }
 
     cJSON *root = cJSON_ParseWithLength(buf, len);
-    if (!root) { ESP_LOGW(TAG, "ip-api JSON parse failed"); return false; }
+    if (!root) { LOGW(TAG, "ip-api JSON parse failed"); return false; }
 
     bool ok = false;
     cJSON *jlat = cJSON_GetObjectItem(root, "lat");
@@ -117,10 +117,10 @@ static void fetch_wttr(char *buf, int buflen, float lat, float lon)
              "http://wttr.in/~%.2f,%.2f?format=j1&days=2&lang=en", lat, lon);
 
     int len = fetch_url(url, buf, buflen, WTTR_TIMEOUT_MS, false);
-    if (len <= 0) { ESP_LOGW(TAG, "wttr.in failed"); return; }
+    if (len <= 0) { LOGW(TAG, "wttr.in failed"); return; }
 
     cJSON *root = cJSON_ParseWithLength(buf, len);
-    if (!root) { ESP_LOGW(TAG, "wttr.in JSON parse failed (len=%d)", len); return; }
+    if (!root) { LOGW(TAG, "wttr.in JSON parse failed (len=%d)", len); return; }
 
     // ---- Current conditions ----
     int  temp_c = 0, humidity = 0, wmo = 0, wind_kmh = 0;
@@ -215,7 +215,7 @@ static void fetch_wttr(char *buf, int buflen, float lat, float lon)
         }
         xSemaphoreGive(s_mutex);
     }
-    ESP_LOGI(TAG, "Weather: %d°C code=%d hum=%d%% wind=%dkm/h hourly=%d [%s]",
+    LOGI(TAG, "Weather: %d°C code=%d hum=%d%% wind=%dkm/h hourly=%d [%s]",
              temp_c, wmo, humidity, wind_kmh, filled, condition);
 }
 
@@ -224,7 +224,7 @@ static void fetch_wttr(char *buf, int buflen, float lat, float lon)
 static void weather_task(void *arg)
 {
     char *buf = heap_caps_malloc(BUF_SIZE, MALLOC_CAP_SPIRAM);
-    if (!buf) { ESP_LOGE(TAG, "OOM"); vTaskDelete(NULL); return; }
+    if (!buf) { LOGE(TAG, "OOM"); vTaskDelete(NULL); return; }
 
     // Wait for NTP sync (up to 30 s)
     int wait = 0;
@@ -265,7 +265,7 @@ static void weather_task(void *arg)
                     else        snprintf(tz, sizeof(tz), "UTC%+d:%02d", -h, m);
                     setenv("TZ", tz, 1);
                     tzset();
-                    ESP_LOGI(TAG, "Location: %s (%.2f,%.2f) TZ=%s", city, lat, lon, tz);
+                    LOGI(TAG, "Location: %s (%.2f,%.2f) TZ=%s", city, lat, lon, tz);
 
                     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(500)) == pdTRUE) {
                         strlcpy(s_data.location, city, sizeof(s_data.location));

@@ -1,5 +1,5 @@
 #include "ble_probe.h"
-#include "esp_log.h"
+#include "app_log.h"
 #include "esp_bt.h"
 #include "esp_timer.h"
 #include "nimble/nimble_port.h"
@@ -88,14 +88,14 @@ static void start_scan(void)
     if (s_paused) return;                // suspended for e.g. an OTA download
     if (s_connecting) return;            // can't scan and connect at once
     if (free_slot() < 0) {               // every slot taken — nothing to find
-        ESP_LOGI(TAG, "all %d probe slots in use", MAX_DIRECT_PROBES);
+        LOGI(TAG, "all %d probe slots in use", MAX_DIRECT_PROBES);
         return;
     }
     struct ble_gap_disc_params p = {0};
     p.passive = 1;
     int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, BLE_HS_FOREVER, &p, gap_event, NULL);
-    if (rc != 0 && rc != BLE_HS_EALREADY) ESP_LOGE(TAG, "disc rc=%d", rc);
-    else ESP_LOGI(TAG, "scanning for \"%s\"", PROBE_NAME);
+    if (rc != 0 && rc != BLE_HS_EALREADY) LOGE(TAG, "disc rc=%d", rc);
+    else LOGI(TAG, "scanning for \"%s\"", PROBE_NAME);
 }
 
 // True if this advertisement's complete/short name equals PROBE_NAME.
@@ -120,10 +120,10 @@ static int on_cccd_written(uint16_t conn, const struct ble_gatt_error *err,
             s_probes[slot].connected = true;
             xSemaphoreGive(s_mutex);
         }
-        ESP_LOGI(TAG, "id=0x%02x subscribed — streaming temperature", s_probes[slot].id);
+        LOGI(TAG, "id=0x%02x subscribed — streaming temperature", s_probes[slot].id);
         start_scan();   // look for the next probe if a slot remains
     } else {
-        ESP_LOGW(TAG, "CCCD write failed status=%d — disconnecting", err->status);
+        LOGW(TAG, "CCCD write failed status=%d — disconnecting", err->status);
         ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
     }
     return 0;
@@ -154,7 +154,7 @@ static int on_chr(uint16_t conn, const struct ble_gatt_error *err,
         s_probes[slot].val_handle = chr->val_handle;
         ble_gattc_disc_all_dscs(conn, chr->val_handle, 0xffff, on_dsc, NULL);
     } else if (err->status == BLE_HS_EDONE && s_probes[slot].val_handle == 0) {
-        ESP_LOGW(TAG, "temp characteristic not found — disconnecting");
+        LOGW(TAG, "temp characteristic not found — disconnecting");
         ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
     }
     return 0;
@@ -187,7 +187,7 @@ static void on_notify(struct ble_gap_event *event)
         s_probes[slot].ever    = true;
         xSemaphoreGive(s_mutex);
     }
-    ESP_LOGI(TAG, "id=0x%02x temp=%.1f C (prefix=0x%02x)",
+    LOGI(TAG, "id=0x%02x temp=%.1f C (prefix=0x%02x)",
              s_probes[slot].id, t, (uint8_t)buf[0]);
 }
 
@@ -230,12 +230,12 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                 pr->id          = d.peer_id_addr.val[0];
                 xSemaphoreGive(s_mutex);
             }
-            ESP_LOGI(TAG, "id=0x%02x connected — discovering temperature characteristic",
+            LOGI(TAG, "id=0x%02x connected — discovering temperature characteristic",
                      pr->id);
             ble_gattc_disc_chrs_by_uuid(pr->conn_handle, 1, 0xffff,
                                         &TEMP_CHR_UUID.u, on_chr, NULL);
         } else {
-            ESP_LOGW(TAG, "connect failed status=%d", event->connect.status);
+            LOGW(TAG, "connect failed status=%d", event->connect.status);
         }
         start_scan();   // resume scanning (for another probe, or retry)
         break;
@@ -243,7 +243,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_DISCONNECT: {
         int slot = slot_by_conn(event->disconnect.conn.conn_handle);
         if (slot >= 0) {
-            ESP_LOGW(TAG, "id=0x%02x disconnected (reason=%d) — rescanning",
+            LOGW(TAG, "id=0x%02x disconnected (reason=%d) — rescanning",
                      s_probes[slot].id, event->disconnect.reason);
             if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE) {
                 s_probes[slot].in_use    = false;
@@ -280,10 +280,10 @@ void ble_probe_init(void)
     s_mutex = xSemaphoreCreateMutex();
 
     esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
-    if (nimble_port_init() != ESP_OK) { ESP_LOGE(TAG, "nimble_port_init failed"); return; }
+    if (nimble_port_init() != ESP_OK) { LOGE(TAG, "nimble_port_init failed"); return; }
     ble_hs_cfg.sync_cb = on_sync;
     nimble_port_freertos_init(host_task);
-    ESP_LOGI(TAG, "started (central, up to %d probes)", MAX_DIRECT_PROBES);
+    LOGI(TAG, "started (central, up to %d probes)", MAX_DIRECT_PROBES);
 }
 
 // ---- Accessors -----------------------------------------------------------

@@ -87,10 +87,12 @@ bool bbq_probe_slot_get(int slot, uint8_t *hw_id_out); // true + hw_id if `slot`
 bool bbq_link_up(void);
 
 // Pause/resume BLE scanning for the active source (dispatches to bbq_ble or
-// ble_probe) — used by ota_update.c to give WiFi the radio to itself for the
-// duration of a firmware download, without OTA needing to know which BLE
-// stack is active.
-void bbq_radio_pause_for_ota(bool pause);
+// ble_probe) — gives WiFi the radio to itself, without the caller needing to
+// know which BLE stack is active. Used during OTA downloads and while the
+// WiFi setup AP is up: continuous BLE scanning shares the radio via
+// coexistence and can delay WiFi frames enough to break 802.11 auth/assoc
+// timing or DHCP delivery — intermittent connect failures traced to this.
+void bbq_radio_pause(bool pause);
 
 // ---- Sensor pool -----------------------------------------------------------
 // Count of sensors currently known: every wired channel that is present, plus

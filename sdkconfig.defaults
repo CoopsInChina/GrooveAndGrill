@@ -28,13 +28,31 @@ CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_BOOT_INIT=y
 CONFIG_SPIRAM_IGNORE_NOTFOUND=n
 CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0  # 0 = all malloc() → PSRAM (internal stays free for DMA)
+# 0 = all malloc() prefers PSRAM (internal stays free for DMA)
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
 # Allow EXT_RAM_BSS_ATTR to place static arrays in PSRAM, freeing DRAM for task stacks
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# WiFi setup portal's DNS hijack redirects every domain to the device, so a
+# phone's parallel connectivity-check probes can exhaust the default 10-socket
+# ceiling (httpd alone claims up to 7 by default) — seen as permanent
+# "error in accept (23)" spam that never recovers. See wifi_manager.c's
+# lru_purge_enable for the other half of this fix.
+CONFIG_LWIP_MAX_SOCKETS=14
 
 # Cache — wider cache lines improve RGB DMA throughput
 CONFIG_ESP32S3_DATA_CACHE_64KB=y
 CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+
+# CONFIG_LCD_RGB_RESTART_IN_VSYNC was tried as a candidate fix for the
+# boot-time screen tear (see GitHub issue #2) — reverted: it never actually
+# eliminated the tear (confirmed on real hardware with it properly
+# compiled in), and its `select GDMA_CTRL_FUNC_IN_IRAM` moves GDMA control
+# code into IRAM, which comes directly out of the same tiny internal-DRAM
+# budget everything else on this chip fights over (linker-time tradeoff on
+# ESP32-S3 — more code in IRAM means less heap in DRAM). With Sonos's own
+# poll_task/cmd_task failing to allocate stacks at boot ("out of internal
+# DRAM"), this is pure cost with no proven benefit — not worth keeping.
 
 # LVGL colour depth (must match RGB panel bits_per_pixel)
 CONFIG_LV_COLOR_DEPTH_16=y

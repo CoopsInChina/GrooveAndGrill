@@ -1,5 +1,5 @@
 #include "bbq_ble.h"
-#include "esp_log.h"
+#include "app_log.h"
 #include "esp_bt.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -87,7 +87,7 @@ static void handle_adv(const uint8_t *data, uint8_t len)
     static uint32_t s_last_log;
     if (first || now - s_last_log > 5000) {
         s_last_log = now;
-        ESP_LOGI(TAG, "%sTC0=%s%.1f TC1=%s%.1f TC2=%s%.1f TC3=%s%.1f  probes=%d",
+        LOGI(TAG, "%sTC0=%s%.1f TC1=%s%.1f TC2=%s%.1f TC3=%s%.1f  probes=%d",
                  first ? "box found — " : "",
                  ok[0] ? "" : "x", t[0], ok[1] ? "" : "x", t[1],
                  ok[2] ? "" : "x", t[2], ok[3] ? "" : "x", t[3], count);
@@ -109,8 +109,8 @@ static void start_scan(void)
     p.window         = 0;
     p.filter_duplicates = 0;          // we want every refresh
     int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, BLE_HS_FOREVER, &p, gap_event, NULL);
-    if (rc != 0) ESP_LOGE(TAG, "ble_gap_disc rc=%d", rc);
-    else         ESP_LOGI(TAG, "passive scan started");
+    if (rc != 0) LOGE(TAG, "ble_gap_disc rc=%d", rc);
+    else         LOGI(TAG, "passive scan started");
 }
 
 static void on_sync(void) { start_scan(); }
@@ -131,12 +131,12 @@ void bbq_ble_init(void)
 
     esp_err_t err = nimble_port_init();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "nimble_port_init: %s", esp_err_to_name(err));
+        LOGE(TAG, "nimble_port_init: %s", esp_err_to_name(err));
         return;
     }
     ble_hs_cfg.sync_cb = on_sync;
     nimble_port_freertos_init(host_task);
-    ESP_LOGI(TAG, "receiver started (observer)");
+    LOGI(TAG, "receiver started (observer)");
 }
 
 uint32_t bbq_ble_age_ms(void)

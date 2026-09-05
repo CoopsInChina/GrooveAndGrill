@@ -22,8 +22,12 @@ src/logo_img.h
 .pioenvs/
 .piolibdeps/
 sdkconfig
-dependencies.lock
 managed_components/
+
+# dependencies.lock IS tracked (repo root): pins managed
+# component versions (esp_lvgl_port, lvgl) to what's actually been tested,
+# so a from-scratch CI build can't silently pull a newer component release
+# with different behaviour than the locally verified build.
 
 # Python bytecode cache
 __pycache__/

@@ -2,6 +2,7 @@
 #include "ui_common.h"
 #include "sonos_controller.h"
 #include "ui_art.h"
+#include "ui_favourites.h"
 #include "lvgl.h"
 #include <stdio.h>
 #include <string.h>
@@ -17,7 +18,16 @@ static char        s_last_art_url[512] = {0};
 
 // ---- Callbacks ----------------------------------------------------
 
-static void go_favourites(void) { ui_navigate_to(SCREEN_FAVOURITES); }
+static void go_favourites(void)
+{
+    // Reset to the first favourite BEFORE the screen becomes visible —
+    // favourites is a cached screen that keeps its scroll position between
+    // visits, so correcting it only after arrival (in scr_loaded_cb) meant
+    // the slide-in transition briefly showed whatever page was left
+    // scrolled-to from the last visit before snapping to page 1.
+    ui_favourites_show_index(0);
+    ui_navigate_to_anim(SCREEN_FAVOURITES, LV_SCR_LOAD_ANIM_MOVE_LEFT);
+}
 static void go_volume(void)     { ui_navigate_to(SCREEN_VOLUME);     }
 
 static bool s_gesture_fired = false;
@@ -76,6 +86,11 @@ lv_obj_t *ui_sonos_main_create(void)
     s_art_img = lv_img_create(s_scr);
     lv_obj_center(s_art_img);
     lv_obj_clear_flag(s_art_img, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    // radius alone doesn't clip an lv_img's pixel content — needs
+    // clip_corner too, or the square art just overlaps a rounded
+    // (invisible) background rect.
+    lv_obj_set_style_radius(s_art_img, 24, 0);
+    lv_obj_set_style_clip_corner(s_art_img, true, 0);
 
     // Progress arc — transparent background, accent indicator
     s_prog_arc = lv_arc_create(s_scr);

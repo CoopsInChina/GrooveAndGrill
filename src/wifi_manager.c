@@ -1,11 +1,14 @@
 #include "wifi_manager.h"
 #include "sonos_controller.h"
+#include "bbq_controller.h"
+#include "web_server.h"
 #include "app_config.h"
 #include "globals.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
+#include "esp_mac.h"
 #include "esp_event.h"
-#include "esp_log.h"
+#include "app_log.h"
 #include "esp_http_server.h"
 #include "esp_sntp.h"
 #include "nvs_flash.h"
@@ -40,13 +43,21 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         s_connected = false;
         memset(s_ip, 0, sizeof(s_ip));
         xEventGroupSetBits(s_wifi_events, WIFI_FAIL_BIT);
-        ESP_LOGW(TAG, "STA disconnected");
+        LOGW(TAG, "STA disconnected");
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *ev = (ip_event_got_ip_t *)data;
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&ev->ip_info.ip));
-        ESP_LOGI(TAG, "Got IP: %s", s_ip);
+        LOGI(TAG, "Got IP: %s", s_ip);
         s_connected = true;
         xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
+    } else if (base == IP_EVENT && id == IP_EVENT_AP_STAIPASSIGNED) {
+        // Diagnostic: a phone has been seen associating to the setup AP but
+        // never completing DHCP, giving up ~15s later. This fires only if
+        // the DHCP server actually hands out a lease — its absence pins the
+        // failure to the DHCP exchange itself rather than something after.
+        ip_event_ap_staipassigned_t *ev = (ip_event_ap_staipassigned_t *)data;
+        LOGI(TAG, "AP: leased " IPSTR " to " MACSTR, IP2STR(&ev->ip),
+                 MAC2STR(ev->mac));
     }
 }
 
@@ -87,6 +98,8 @@ void wifi_manager_init(void)
                                         wifi_event_handler, NULL, NULL);
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
                                         wifi_event_handler, NULL, NULL);
+    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_AP_STAIPASSIGNED,
+                                        wifi_event_handler, NULL, NULL);
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
@@ -96,7 +109,7 @@ bool wifi_manager_begin_connect(void)
 {
     char ssid[64] = {0}, pass[64] = {0};
     if (!load_credentials(ssid, sizeof(ssid), pass, sizeof(pass))) {
-        ESP_LOGW(TAG, "No saved credentials");
+        LOGW(TAG, "No saved credentials");
         return false;
     }
 
@@ -107,7 +120,7 @@ bool wifi_manager_begin_connect(void)
     xEventGroupClearBits(s_wifi_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wcfg));
     ESP_ERROR_CHECK(esp_wifi_connect());
-    ESP_LOGI(TAG, "Connecting to '%s' (background)...", ssid);
+    LOGI(TAG, "Connecting to '%s' (background)...", ssid);
     return true;
 }
 
@@ -119,7 +132,7 @@ bool wifi_manager_wait_connect(uint32_t timeout_ms)
 
     for (int retry = 0; retry < WIFI_CONNECT_RETRIES; retry++) {
         if (retry > 0) {
-            ESP_LOGI(TAG, "Retry %d/%d for '%s'", retry, WIFI_CONNECT_RETRIES - 1, ssid);
+            LOGW(TAG, "Retry %d/%d for '%s'", retry, WIFI_CONNECT_RETRIES - 1, ssid);
             esp_wifi_disconnect();
             vTaskDelay(pdMS_TO_TICKS(500));
 
@@ -138,14 +151,14 @@ bool wifi_manager_wait_connect(uint32_t timeout_ms)
 
         if (bits & WIFI_CONNECTED_BIT) {
             strncpy(s_ssid, ssid, sizeof(s_ssid) - 1);
-            ESP_LOGI(TAG, "Connected! IP: %s", s_ip);
+            LOGI(TAG, "Connected! IP: %s", s_ip);
             wifi_manager_start_ntp();
             return true;
         }
-        ESP_LOGW(TAG, "Attempt %d failed", retry + 1);
+        LOGW(TAG, "Attempt %d failed", retry + 1);
     }
 
-    ESP_LOGE(TAG, "Could not connect to '%s' after %d attempts", ssid, WIFI_CONNECT_RETRIES);
+    LOGE(TAG, "Could not connect to '%s' after %d attempts", ssid, WIFI_CONNECT_RETRIES);
     return false;
 }
 
@@ -166,7 +179,7 @@ void wifi_manager_start_ntp(void)
     esp_sntp_setservername(2, "cn.pool.ntp.org");
     esp_sntp_init();
     g_ntp_synced = false;
-    ESP_LOGI(TAG, "NTP sync started");
+    LOGI(TAG, "NTP sync started");
 }
 
 // ---- Background monitor task -----------------------------------------
@@ -177,7 +190,7 @@ static void monitor_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(10000));
 
         if (!s_connected && !s_ap_active) {
-            ESP_LOGI(TAG, "Monitor: reconnecting...");
+            LOGW(TAG, "Monitor: reconnecting...");
             xEventGroupClearBits(s_wifi_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
             esp_wifi_connect();
             EventBits_t bits = xEventGroupWaitBits(s_wifi_events,
@@ -196,7 +209,7 @@ static void monitor_task(void *arg)
             time(&now);
             if (now > 1700000000) {  // sanity: after Nov 2023
                 g_ntp_synced = true;
-                ESP_LOGI(TAG, "NTP synced");
+                LOGI(TAG, "NTP synced");
             }
         }
     }
@@ -319,7 +332,13 @@ static esp_err_t portal_redirect_handler(httpd_req_t *req)
 static esp_err_t portal_scan_handler(httpd_req_t *req)
 {
     wifi_scan_config_t cfg = { .scan_type = WIFI_SCAN_TYPE_ACTIVE };
-    esp_wifi_scan_start(&cfg, true);   // blocking ~2 s
+    esp_err_t scan_err = esp_wifi_scan_start(&cfg, true);   // blocking ~2 s
+    if (scan_err != ESP_OK) {
+        // Seen empty results with no visible cause — this pins it down:
+        // esp_wifi_scan_start can fail outright in concurrent AP+STA mode
+        // (e.g. ESP_ERR_WIFI_STATE) and the old code silently ignored it.
+        LOGE(TAG, "scan: esp_wifi_scan_start failed: %s", esp_err_to_name(scan_err));
+    }
 
     uint16_t count = 0;
     esp_wifi_scan_get_ap_num(&count);
@@ -360,6 +379,16 @@ static esp_err_t portal_scan_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static void save_finish_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(500));
+    wifi_manager_stop_setup_ap();
+    xEventGroupClearBits(s_wifi_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
+    esp_wifi_connect();
+    vTaskDelete(NULL);
+}
+
 static esp_err_t portal_save_handler(httpd_req_t *req)
 {
     char body[512] = {0};
@@ -387,10 +416,13 @@ static esp_err_t portal_save_handler(httpd_req_t *req)
     wifi_manager_save_credentials(ssid, pass);
     httpd_resp_sendstr(req, "Saved! Connecting shortly — you can close this page.");
 
-    vTaskDelay(pdMS_TO_TICKS(500));
-    wifi_manager_stop_setup_ap();
-    xEventGroupClearBits(s_wifi_events, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
-    esp_wifi_connect();
+    // Deferred to its own task: wifi_manager_stop_setup_ap() calls
+    // httpd_stop() on this very server, and this handler runs on the
+    // server's own worker task — httpd_stop() blocks waiting for that
+    // worker to exit, which can never happen if it's the one calling it.
+    // That self-join deadlock hung the whole device (this handler is what
+    // the LVGL poll timer is waiting on to see the AP go down).
+    xTaskCreate(save_finish_task, "wifi_save_fin", 3072, NULL, 5, NULL);
     return ESP_OK;
 }
 
@@ -460,6 +492,22 @@ void wifi_manager_start_setup_ap(void)
 {
     if (s_ap_active) return;
 
+    // Continuous BLE scanning shares the radio with WiFi via coexistence
+    // (see bbq_controller.h's bbq_radio_pause()) and can delay AP frames
+    // enough to break 802.11 auth/assoc timing or DHCP delivery — traced to
+    // intermittent connect failures during setup that didn't happen before
+    // BLE support existed.
+    bbq_radio_pause(true);
+
+    // The always-on /setup config server and this captive portal both
+    // default to port 80 — only one httpd instance can bind it. Without
+    // this, httpd_start() below silently fails ("error in listen"),
+    // leaving no captive-portal server running at all, so every OS
+    // connectivity probe (generate_204, connecttest.txt, ...) 404s and the
+    // portal never pops up — even though the phone/laptop actually joined
+    // and got a DHCP lease.
+    web_server_stop();
+
     esp_wifi_stop();
     esp_wifi_set_mode(WIFI_MODE_APSTA);
 
@@ -482,22 +530,37 @@ void wifi_manager_start_setup_ap(void)
     httpd_config_t srv_cfg = HTTPD_DEFAULT_CONFIG();
     srv_cfg.uri_match_fn     = httpd_uri_match_wildcard;
     srv_cfg.max_uri_handlers = 8;
+    // The DNS hijack redirects every domain here, so a phone's parallel
+    // connectivity-check probes (generate_204, hotspot-detect.html, etc.)
+    // can pile up fast. lru_purge_enable makes a full server evict its
+    // oldest connection instead of permanently failing accept() once the
+    // socket pool fills — seen in the field as endless
+    // "httpd_accept_conn: error in accept (23)" that never recovered.
+    srv_cfg.max_open_sockets = 9;
+    srv_cfg.lru_purge_enable = true;
     httpd_start(&s_portal_srv, &srv_cfg);
 
-    // Register specific routes first — wildcard catch-all must be last
+    // Register specific routes first — wildcard catch-all must be last.
+    // HEAD on "/*" matters: Windows' NCSI connectivity probe (GET/HEAD
+    // .../connecttest.txt) and some browsers' pre-flight checks use HEAD,
+    // and httpd matches (uri, method) pairs — without this, a HEAD to any
+    // path (including "/") falls through every route with no match and
+    // gets a bare 405, which some OSes read as "no captive portal here"
+    // and never pop the portal browser.
     static const httpd_uri_t routes[] = {
         { .uri = "/",     .method = HTTP_GET,  .handler = portal_get_handler      },
         { .uri = "/scan", .method = HTTP_GET,  .handler = portal_scan_handler     },
         { .uri = "/save", .method = HTTP_POST, .handler = portal_save_handler     },
         { .uri = "/*",    .method = HTTP_GET,  .handler = portal_redirect_handler },
+        { .uri = "/*",    .method = HTTP_HEAD, .handler = portal_redirect_handler },
     };
-    for (int i = 0; i < 4; i++) httpd_register_uri_handler(s_portal_srv, &routes[i]);
+    for (int i = 0; i < 5; i++) httpd_register_uri_handler(s_portal_srv, &routes[i]);
 
     // DNS server — redirects all domains to 192.168.4.1
     xTaskCreate(dns_server_task, "dns_srv", 3072, NULL, 5, &s_dns_task);
 
     s_ap_active = true;
-    ESP_LOGI(TAG, "Setup AP active — SSID: %s  http://%s", WIFI_AP_SSID, WIFI_AP_IP);
+    LOGI(TAG, "Setup AP active — SSID: %s  http://%s", WIFI_AP_SSID, WIFI_AP_IP);
 }
 
 void wifi_manager_stop_setup_ap(void)
@@ -513,7 +576,9 @@ void wifi_manager_stop_setup_ap(void)
     }
     s_ap_active = false;
     esp_wifi_set_mode(WIFI_MODE_STA);
-    ESP_LOGI(TAG, "Setup AP stopped");
+    bbq_radio_pause(false);
+    web_server_start();
+    LOGI(TAG, "Setup AP stopped");
 }
 
 // ---- Accessors -------------------------------------------------------
@@ -531,6 +596,6 @@ void wifi_manager_save_credentials(const char *ssid, const char *pass)
         nvs_set_str(nvs, NVS_KEY_WIFI_PASS, pass);
         nvs_commit(nvs);
         nvs_close(nvs);
-        ESP_LOGI(TAG, "Saved credentials for '%s'", ssid);
+        LOGI(TAG, "Saved credentials for '%s'", ssid);
     }
 }

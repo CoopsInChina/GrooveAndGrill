@@ -16,10 +16,12 @@ static lv_obj_t *s_icon[3] = {NULL, NULL, NULL};
 
 static const char *ICON_SYMBOL[3] = { LV_SYMBOL_WIFI, LV_SYMBOL_AUDIO, LV_SYMBOL_DRIVE };
 
-// Icon positions, matched to the artwork in assets/Boot.jpg: Sonos sits dead
-// centre on the vinyl/speaker graphic, WiFi and Server flank the grill.
-static const int ICON_X[3] = { -165, 0, 165 };
-static const int ICON_Y[3] = { 6,    0, 6   };
+// Icon positions, matched to the artwork in assets/Boot.jpg. Server's own
+// icon is hidden (see ui_boot_create) — its node-sonos-http-api discovery
+// is optional/legacy and not worth surfacing as a status the user has to
+// care about — so Sonos has moved into that now-vacant right-hand slot.
+static const int ICON_X[3] = { -165, 165, 165 };
+static const int ICON_Y[3] = { 6,    6,   6   };
 
 static void make_icon(int idx)
 {
@@ -44,9 +46,11 @@ lv_obj_t *ui_boot_create(void)
     lv_obj_clear_flag(bg, LV_OBJ_FLAG_CLICKABLE);
 
     // ---- Status indicator icons ----
+    // Server (node-sonos-http-api discovery) has no icon — optional/legacy
+    // fallback, not worth surfacing to the user. ui_boot_set_icon() calls
+    // for it are safe no-ops since s_icon[BOOT_ICON_SERVER] stays NULL.
     make_icon(BOOT_ICON_WIFI);
     make_icon(BOOT_ICON_SONOS);
-    make_icon(BOOT_ICON_SERVER);
 
     // ---- Status text — near the bottom, on a translucent backdrop so it
     // stays legible over the artwork underneath ----
@@ -92,7 +96,7 @@ void ui_boot_set_status(const char *msg, int progress_pct)
     (void)progress_pct;
     if (!s_scr) return;
     if (s_status) lv_label_set_text(s_status, msg);
-    lv_refr_now(NULL);
+    // No lv_refr_now() here — see ui_boot_set_icon()'s comment.
 }
 
 void ui_boot_set_icon(int idx, int state)
@@ -105,5 +109,19 @@ void ui_boot_set_icon(int idx, int state)
         default:              col = lv_color_hex(0x444444);      break;
     }
     if (s_icon[idx]) lv_obj_set_style_text_color(s_icon[idx], col, 0);
-    lv_refr_now(NULL);
+    // lv_refr_now() forces the whole redraw+flush pipeline (including the
+    // RGB panel's esp_lcd_panel_draw_bitmap()+vsync-wait semaphore) to run
+    // synchronously on THIS task (app_main) instead of the dedicated
+    // lvgl_port_task that's supposed to own all rendering. display_lock()/
+    // display_unlock() only protect LVGL's data structures from concurrent
+    // modification — they don't make it safe to drive the flush pipeline
+    // from a second task. Every other screen in this app goes through
+    // lv_scr_load_anim()/ui_navigate_to(), which the port task's own timer
+    // picks up on its own; this boot screen was the only caller forcing a
+    // foreign-task flush, and is the likely cause of a torn/ghosted frame
+    // that was showing up reliably during the boot sequence. The label/
+    // style changes above already invalidate their own region via LVGL's
+    // normal object API, so the port task's timer (max 500ms sleep) picks
+    // them up and flushes them on its own — imperceptibly fast, and with
+    // rendering staying single-task-owned as LVGL's threading model expects.
 }

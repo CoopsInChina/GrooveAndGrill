@@ -153,7 +153,7 @@ lv_obj_t *ui_wifi_setup_create(void)
     lv_label_set_text(title, "WiFi Setup");
     lv_obj_set_style_text_color(title, COL_ACCENT, 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
-    lv_obj_align(title, LV_ALIGN_CENTER, 25, -185);
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, -155);
 
     // Status text (visible when AP not active)
     const char *ssid = wifi_manager_ssid();
@@ -185,7 +185,7 @@ lv_obj_t *ui_wifi_setup_create(void)
     lv_obj_set_style_text_color(s_ap_hint, COL_ACCENT, 0);
     lv_obj_set_style_text_font(s_ap_hint, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_align(s_ap_hint, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_ap_hint, LV_ALIGN_CENTER, 0, 105);
+    lv_obj_align(s_ap_hint, LV_ALIGN_CENTER, 0, 95);
     lv_obj_add_flag(s_ap_hint, LV_OBJ_FLAG_HIDDEN);
 
     // URL fallback hint
@@ -194,7 +194,7 @@ lv_obj_t *ui_wifi_setup_create(void)
     lv_obj_set_style_text_color(s_url_hint, COL_TEXT_DIM, 0);
     lv_obj_set_style_text_font(s_url_hint, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_align(s_url_hint, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_url_hint, LV_ALIGN_CENTER, 0, 128);
+    lv_obj_align(s_url_hint, LV_ALIGN_CENTER, 0, 113);
     lv_obj_add_flag(s_url_hint, LV_OBJ_FLAG_HIDDEN);
 
     // Setup / Stop button

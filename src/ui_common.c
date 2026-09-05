@@ -15,7 +15,7 @@
 #include "ui_widgets.h"
 #include "ui_reboot.h"
 
-#include "esp_log.h"
+#include "app_log.h"
 
 static const char *TAG = "ui_common";
 
@@ -44,7 +44,7 @@ static screen_create_fn_t s_create_fns[SCREEN_COUNT] = {
     [SCREEN_REBOOT]        = ui_reboot_create,
 };
 
-void ui_navigate_to(screen_id_t id)
+static void navigate_to_impl(screen_id_t id, lv_scr_load_anim_t anim)
 {
     if (id >= SCREEN_COUNT) return;
 
@@ -52,13 +52,22 @@ void ui_navigate_to(screen_id_t id)
     if (!s_screens[id]) {
         s_screens[id] = s_create_fns[id]();
         if (!s_screens[id]) {
-            ESP_LOGE(TAG, "Failed to create screen %d", id);
+            LOGE(TAG, "Failed to create screen %d", id);
             return;
         }
     }
 
-    lv_scr_load_anim(s_screens[id], LV_SCR_LOAD_ANIM_FADE_ON, 250, 0, false);
+    lv_scr_load_anim(s_screens[id], anim, 250, 0, false);
     s_current = id;
+
+    // A screen switch triggered by a gesture (e.g. swipe into Favourites)
+    // is a fixed-duration animation, not real finger-tracking — the same
+    // physical touch is often still in progress (finger still down/moving)
+    // when it completes and the new screen becomes active. Without this,
+    // that in-flight press/drag carries straight over and gets grabbed by
+    // whatever's scrollable on the new screen, causing a spurious jump
+    // right on arrival.
+    lv_indev_reset(NULL, NULL);
 
     // Screens are cached forever once created (see s_screens[] above), so
     // LVGL's own object/style pool only trends downward as new screens get
@@ -67,11 +76,21 @@ void ui_navigate_to(screen_id_t id)
     // when LVGL objects are created, so log LVGL's own pool instead.
     lv_mem_monitor_t mon;
     lv_mem_monitor(&mon);
-    ESP_LOGI(TAG, "Navigate -> screen %d (%s) — LVGL pool: %u%% used, %u%% frag, "
+    LOGI(TAG, "Navigate -> screen %d (%s) — LVGL pool: %u%% used, %u%% frag, "
              "free: %u bytes (biggest block: %u)",
              id, first_visit ? "first visit, just created" : "cached",
              mon.used_pct, mon.frag_pct, (unsigned)mon.free_size,
              (unsigned)mon.free_biggest_size);
+}
+
+void ui_navigate_to(screen_id_t id)
+{
+    navigate_to_impl(id, LV_SCR_LOAD_ANIM_FADE_ON);
+}
+
+void ui_navigate_to_anim(screen_id_t id, lv_scr_load_anim_t anim)
+{
+    navigate_to_impl(id, anim);
 }
 
 void ui_screen_invalidate(screen_id_t id)

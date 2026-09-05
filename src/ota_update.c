@@ -7,7 +7,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_ota_ops.h"
 #include "esp_attr.h"
-#include "esp_log.h"
+#include "app_log.h"
 #include "esp_timer.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
@@ -48,20 +48,14 @@ static StaticTask_t                 s_check_tcb;
 // through the same bus/cache being disabled) — crashes with
 // "esp_task_stack_is_sane_cache_disabled()" otherwise.
 //
-// Static (not dynamic xTaskCreate): tried dynamic first to avoid a permanent
-// reservation, but it failed outright once the larger LWIP_TCP_WND_DEFAULT
-// (see sdkconfig.defaults) left too little contiguous internal heap at the
-// exact moment "Update Now" is tapped — confirmed by "xTaskCreate(update)
-// failed" in the field. A static buffer is reserved once at link time, so it
-// no longer competes for a live, possibly-fragmented heap right when it's
-// needed most. The 8KB permanent cost is paid for by NOT also cutting the
-// LVGL pool to compensate — our usage-% logs undercount the true worst case
-// (screens never visited in a given session don't show up), so that's not
-// a safe lever to guess at. Watch "DRAM free before tasks" after this
-// change; if Sonos's poll_task/cmd_task ever fail to spawn because of it,
-// that's the real, measured signal to revisit — not a guess.
-static StackType_t  s_update_stack[UPDATE_STACK_WORDS];
-static StaticTask_t s_update_tcb;
+// Dynamic (not static xTaskCreateStatic): a static buffer was tried to
+// dodge live heap fragmentation, but its permanent 8KB reservation — paid
+// on every boot whether or not OTA ever runs — was confirmed in the field
+// to starve Sonos's cmd_task ("cmd_task create FAILED — out of internal
+// DRAM") and even the display's own RGB panel bounce-buffer allocation on
+// a fresh flash. OTA runs rarely and can surface a clear "out of memory,
+// try again" error on failure; Sonos runs every boot and can't be the one
+// paying that tax. Back to dynamic.
 
 static SemaphoreHandle_t s_mutex;
 static ota_status_t      s_status;
@@ -125,7 +119,7 @@ static int fetch_url(const char *url, char *buf, int max_len, int timeout_ms)
     int status = esp_http_client_get_status_code(c);
     esp_http_client_cleanup(c);
     if (err != ESP_OK || status != 200) {
-        ESP_LOGW(TAG, "check fetch err=%d status=%d", err, status);
+        LOGW(TAG, "check fetch err=%d status=%d", err, status);
         return -1;
     }
     return status;
@@ -175,7 +169,7 @@ static void check_task(void *arg)
                                                                  : OTA_UPDATE_AVAILABLE;
     cJSON_Delete(root);
     set_status(&s);
-    ESP_LOGI(TAG, "check: running=%s latest=%s", FIRMWARE_VERSION, s.latest_version);
+    LOGI(TAG, "check: running=%s latest=%s", FIRMWARE_VERSION, s.latest_version);
     vTaskDelete(NULL);
 }
 
@@ -188,7 +182,7 @@ void ota_check_async(void)
         ota_status_t s = { .state = OTA_CHECK_FAILED };
         snprintf(s.error, sizeof(s.error), "Out of memory — try again");
         set_status(&s);
-        ESP_LOGE(TAG, "xTaskCreateStatic(check) failed");
+        LOGE(TAG, "xTaskCreateStatic(check) failed");
     }
 }
 
@@ -230,14 +224,14 @@ static void update_task(void *arg)
     // BLE (scanning + any live connections) shares the same radio as WiFi —
     // left running, it throttles the download badly. Paused for the
     // download, resumed on every exit path below.
-    bbq_radio_pause_for_ota(true);
+    bbq_radio_pause(true);
 
     if (!s_ota_open) {
         s_ota_partition = esp_ota_get_next_update_partition(NULL);
         if (!s_ota_partition || esp_ota_begin(s_ota_partition, OTA_SIZE_UNKNOWN, &s_ota_handle) != ESP_OK) {
             g_last_network_end_ms = ms_now();
             xSemaphoreGive(g_network_mutex);
-            bbq_radio_pause_for_ota(false);
+            bbq_radio_pause(false);
             s.state = OTA_DONE_FAIL;
             snprintf(s.error, sizeof(s.error), "Could not start download");
             set_status(&s);
@@ -277,10 +271,10 @@ static void update_task(void *arg)
             esp_http_client_fetch_headers(client);
             status = esp_http_client_get_status_code(client);
             if (status == 200 || status == 206) break;
-            ESP_LOGW(TAG, "unexpected HTTP status %d", status);
+            LOGW(TAG, "unexpected HTTP status %d", status);
             err = ESP_FAIL;
         }
-        ESP_LOGW(TAG, "connect attempt %d/%d failed: %s",
+        LOGW(TAG, "connect attempt %d/%d failed: %s",
                  attempt, OTA_BEGIN_RETRIES, esp_err_to_name(err));
         esp_http_client_cleanup(client);
         client = NULL;
@@ -289,7 +283,7 @@ static void update_task(void *arg)
     if (!client || err != ESP_OK) {
         g_last_network_end_ms = ms_now();
         xSemaphoreGive(g_network_mutex);
-        bbq_radio_pause_for_ota(false);
+        bbq_radio_pause(false);
         s.state = OTA_DONE_FAIL;
         snprintf(s.error, sizeof(s.error), "Could not start download — progress kept, try again");
         set_status(&s);
@@ -301,7 +295,7 @@ static void update_task(void *arg)
     // sending the whole file from byte 0 again. Restart clean rather than
     // risk corrupting the partition by writing over our partial progress.
     if (s_ota_written > 0 && status == 200) {
-        ESP_LOGW(TAG, "server ignored Range — restarting from scratch");
+        LOGW(TAG, "server ignored Range — restarting from scratch");
         esp_ota_abort(s_ota_handle);
         esp_ota_begin(s_ota_partition, OTA_SIZE_UNKNOWN, &s_ota_handle);
         s_ota_written = 0;
@@ -334,19 +328,19 @@ static void update_task(void *arg)
             last_bytes = s_ota_written;
             last_progress_ms = now;
         } else if (now - last_progress_ms >= OTA_STALL_TIMEOUT_MS) {
-            ESP_LOGW(TAG, "update: stalled at %d bytes, giving up", s_ota_written);
+            LOGE(TAG, "update: stalled at %d bytes, giving up", s_ota_written);
             stalled = true;
             break;
         }
         if (now - last_log_ms >= OTA_LOG_INTERVAL_MS) {
             last_log_ms = now;
-            ESP_LOGI(TAG, "update: %d / %d bytes", s.bytes_read, s.image_size);
+            LOGI(TAG, "update: %d / %d bytes", s.bytes_read, s.image_size);
         }
     }
     esp_http_client_cleanup(client);
     g_last_network_end_ms = ms_now();
     xSemaphoreGive(g_network_mutex);
-    bbq_radio_pause_for_ota(false);
+    bbq_radio_pause(false);
 
     if (stalled || failed) {
         // s_ota_open / s_ota_written deliberately left as-is: next Update Now
@@ -379,20 +373,20 @@ static void update_task(void *arg)
     // countdown screen — we don't esp_restart() here ourselves.
     s.state = OTA_DONE_OK;
     set_status(&s);
-    ESP_LOGI(TAG, "update: wrote %d bytes, ready to reboot", s.bytes_read);
+    LOGI(TAG, "update: wrote %d bytes, ready to reboot", s.bytes_read);
     vTaskDelete(NULL);
 }
 
 void ota_start_async(void)
 {
     ensure_mutex();
-    TaskHandle_t h = xTaskCreateStatic(update_task, "ota_update", UPDATE_STACK_WORDS,
-                                       NULL, 3, s_update_stack, &s_update_tcb);
-    if (!h) {
+    BaseType_t ok = xTaskCreate(update_task, "ota_update", UPDATE_STACK_WORDS,
+                                NULL, 3, NULL);
+    if (ok != pdPASS) {
         ota_status_t s = { .state = OTA_DONE_FAIL };
         snprintf(s.error, sizeof(s.error), "Out of memory — try again");
         set_status(&s);
-        ESP_LOGE(TAG, "xTaskCreateStatic(update) failed");
+        LOGE(TAG, "xTaskCreate(update) failed");
     }
 }
 
@@ -404,6 +398,6 @@ void ota_mark_app_valid(void)
     if (esp_ota_get_state_partition(running, &state) == ESP_OK &&
         state == ESP_OTA_IMG_PENDING_VERIFY) {
         esp_ota_mark_app_valid_cancel_rollback();
-        ESP_LOGI(TAG, "image marked valid, rollback cancelled");
+        LOGI(TAG, "image marked valid, rollback cancelled");
     }
 }

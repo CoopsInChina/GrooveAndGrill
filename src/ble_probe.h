@@ -9,8 +9,9 @@
 // Scans for wireless "BBQ" thermometers (ODM CXL-...) and holds up to
 // MAX_DIRECT_PROBES concurrent GATT connections, each streaming temperature via
 // a NOTIFY characteristic (payload: [1 prefix byte][ASCII decimal temp]).
-// Used when the source mode is BBQ_SRC_PROBE. Protocol reverse-engineered in
-// docs/bbq_ble_probe_integration.md.
+// Used when the source mode is BBQ_SRC_PROBE. Protocol reverse-engineered by
+// inspection — see the UUID/parsing logic in ble_probe.c; no separate protocol
+// doc exists yet.
 //
 // Needs the BLE CENTRAL role; the controller is sized for MAX_DIRECT_PROBES
 // connections (see sdkconfig CONFIG_BT_NIMBLE_MAX_CONNECTIONS / BLE_MAX_ACT).
@@ -34,7 +35,7 @@ bool ble_probe_at(int i, uint8_t *id, float *temp_c);
 bool ble_probe_any(void);
 
 // Temporarily stop/resume scanning for new probes — used to free the shared
-// radio for a WiFi-heavy operation (OTA download). Existing connections are
-// left alone. See bbq_controller.h's bbq_radio_pause_for_ota().
+// radio for a WiFi-heavy operation (OTA download, WiFi setup AP). Existing
+// connections are left alone. See bbq_controller.h's bbq_radio_pause().
 void ble_probe_scan_pause(void);
 void ble_probe_scan_resume(void);

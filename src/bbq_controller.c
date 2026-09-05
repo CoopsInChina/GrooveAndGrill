@@ -4,7 +4,7 @@
 #include "buzzer.h"
 #include "app_config.h"
 #include "esp_timer.h"
-#include "esp_log.h"
+#include "app_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
@@ -102,7 +102,7 @@ static void alloc_load(void)
         a->target_c  = (int16_t)(blob[n] | (blob[n + 1] << 8));
         n += 2;
     }
-    ESP_LOGI(TAG, "loaded %d sensor allocation(s)", slot);
+    LOGI(TAG, "loaded %d sensor allocation(s)", slot);
 }
 
 // ---- Direct-probe slot identity (see header) --------------------------------
@@ -152,7 +152,7 @@ static void probe_slot_touch(uint8_t hw_id)
             s_probe_slots[i].used  = true;
             s_probe_slots[i].hw_id = hw_id;
             probe_slots_save();
-            ESP_LOGI(TAG, "probe id=0x%02x bonded to slot %d", hw_id, i + 1);
+            LOGI(TAG, "probe id=0x%02x bonded to slot %d", hw_id, i + 1);
             return;
         }
     }
@@ -168,7 +168,7 @@ static void probe_slot_release(uint8_t hw_id)
             s_probe_slots[i].hw_id = 0;
             xSemaphoreGive(s_lock);
             probe_slots_save();
-            ESP_LOGI(TAG, "probe id=0x%02x released from slot %d", hw_id, i + 1);
+            LOGI(TAG, "probe id=0x%02x released from slot %d", hw_id, i + 1);
             return;
         }
     }
@@ -220,7 +220,7 @@ bool bbq_link_up(void)
     return (s_source == BBQ_SRC_PROBE) ? ble_probe_any() : bbq_ble_present();
 }
 
-void bbq_radio_pause_for_ota(bool pause)
+void bbq_radio_pause(bool pause)
 {
     if (s_source == BBQ_SRC_PROBE) {
         if (pause) ble_probe_scan_pause();
@@ -240,7 +240,7 @@ void bbq_clear_all(void)
     alloc_save();
     probe_slots_save();
     poll_cb(NULL);     // rebuild the live pool immediately (→ no views)
-    ESP_LOGI(TAG, "cleared all sensor allocations");
+    LOGI(TAG, "cleared all sensor allocations");
 }
 
 void bbq_source_set(bbq_source_t src)
