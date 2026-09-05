@@ -1,6 +1,6 @@
 # Groove & Grill
 
-<img src="assets/ReadmePictures/BootScreen.jpg" alt="Groove & Grill boot screen" width="280">
+<p align="center"><img src="assets/ReadmePictures/Logo.jpg" alt="Groove & Grill logo" width="280"></p>
 
 ![Platform](https://img.shields.io/badge/platform-ESP32--S3-blue)
 ![Framework](https://img.shields.io/badge/framework-ESP--IDF%205.3.1-blue)
@@ -20,20 +20,7 @@ the display in standalone mode.
 
 ---
 
-## Contents
-- [Screenshots](#screenshots)
-- [Hardware](#hardware)
-- [Getting started](#getting-started)
-  - [🍖 Want to just use it?](#-want-to-just-use-it)
-  - [🛠️ Want to tinker?](#️-want-to-tinker)
-- [Using the device](#using-the-device)
-- [BBQ monitoring](#bbq-monitoring)
-- [Releasing a new version](#releasing-a-new-version)
-- [Project layout](#project-layout)
-- [Known issues](#known-issues)
-- [Roadmap / to-do](#roadmap--to-do)
-- [License](#license)
-- [Credits](#credits)
+[Screenshots](#screenshots) · [Hardware](#hardware) · [Getting started](#getting-started) · [Using the device](#using-the-device) · [BBQ monitoring](#bbq-monitoring) · [Releasing a new version](#releasing-a-new-version) · [Project layout](#project-layout) · [Known issues](#known-issues) · [Roadmap](#roadmap--to-do) · [License](#license) · [Credits](#credits)
 
 ---
 
